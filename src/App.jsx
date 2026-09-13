@@ -12,6 +12,7 @@ import {
   Trash2,
   X,
   Search,
+  Save,
   Send,
   Megaphone,
   Target,
@@ -202,6 +203,7 @@ const STORAGE_KEYS = {
   caminhoes: "top-locacoes:caminhoes",
   empresasRetirada: "top-locacoes:empresas-retirada",
   galeriaDivulgacao: "top-locacoes:galeria-divulgacao",
+  cubicagens: "top-locacoes:cubicagens",
   mensagens: "top-locacoes:mensagens",
   usuarios: "top-locacoes:usuarios",
   logAcessos: "top-locacoes:log-acessos",
@@ -1811,7 +1813,7 @@ const NAV_ITEMS = [
   { id: "mensagens", label: "Mensagens", icon: MessageSquare },
   { id: "clientes", label: "Clientes", icon: Users },
   { id: "divulgacao", label: "Divulgação", icon: Megaphone },
-  { id: "producaoEsc", label: "Produção", icon: Truck },
+  { id: "producaoEsc", label: "Produção-Concreto", icon: Truck },
   { id: "propostas", label: "Propostas", icon: FileText },
   { id: "manutencao", label: "Manutenção", icon: Wrench },
   { id: "agenda", label: "Agenda", icon: Calendar },
@@ -1877,6 +1879,7 @@ export default function App() {
   const [caminhoes, setCaminhoes] = useState([]);
   const [empresasRetirada, setEmpresasRetirada] = useState([]);
   const [galeriaDivulgacao, setGaleriaDivulgacao] = useState([]);
+  const [cubicagens, setCubicagens] = useState([]);
   const [mensagens, setMensagens] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [logAcessos, setLogAcessos] = useState([]);
@@ -1947,7 +1950,7 @@ export default function App() {
     (async () => {
      try {
       console.log("[TopLocacoes] App: iniciando carregamento de todas as coleções...");
-      let [c, pe, pr, mq, mn, ag, cd, fn, op, vd, us, lg, sc, dsp, flh, func, mtr, cam, empR, galDiv, msgs] = await Promise.all([
+      let [c, pe, pr, mq, mn, ag, cd, fn, op, vd, us, lg, sc, dsp, flh, func, mtr, cam, empR, galDiv, msgs, cub] = await Promise.all([
         loadCollection(STORAGE_KEYS.clientes),
         loadCollection(STORAGE_KEYS.producaoEsc),
         loadCollection(STORAGE_KEYS.propostas),
@@ -1968,6 +1971,7 @@ export default function App() {
         loadCollection(STORAGE_KEYS.caminhoes),
         loadCollection(STORAGE_KEYS.empresasRetirada),
         loadCollection(STORAGE_KEYS.galeriaDivulgacao),
+        loadCollection(STORAGE_KEYS.cubicagens),
         loadCollection(STORAGE_KEYS.mensagens),
       ]);
 
@@ -2028,6 +2032,7 @@ export default function App() {
       setEmpresasRetirada(empR);
       setGaleriaDivulgacao(galDiv);
       setMensagens(msgs);
+      setCubicagens(cub);
 
       lastSyncedRef.current = {
         [STORAGE_KEYS.clientes]: JSON.stringify(c),
@@ -2468,7 +2473,7 @@ export default function App() {
           )}
           {tab === "producaoEsc" && (
             <ProducaoModule
-              title="Produção · Escavadeira"
+              title="Produção-Concreto"
               icon={Truck}
               tipo="Escavadeira"
               equipamentos={equipamentosEsc}
@@ -2544,7 +2549,13 @@ export default function App() {
               propostas={propostas}
             />
           )}
-          {tab === "calculadora" && <CalculadoraModule />}
+          {tab === "calculadora" && (
+            <CalculadoraModule
+              cubicagens={cubicagens}
+              clienteByPedido={clienteByPedido}
+              onChange={(next) => persist(STORAGE_KEYS.cubicagens, setCubicagens, next)}
+            />
+          )}
           {tab === "despesas" && (
             <DespesasModule
               despesas={despesas}
@@ -3296,8 +3307,7 @@ function enderecoCompleto(cliente) {
 // com o que deveria ser, mesmo fora do formulário.
 function calcularTotalProducao(r) {
   const viagensTotal = (r.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
-  const totalReceberRetirada = (Number(r.valorReceberRetirada) || 0) * (Number(r.qtdRetirada) || 1);
-  return (Number(r.qtdDias) || 0) * (Number(r.valorDiaria) || 0) + (Number(r.frete) || 0) + viagensTotal + (r.retiradaMaterial ? totalReceberRetirada : 0);
+  return (Number(r.qtdDias) || 0) * (Number(r.valorDiaria) || 0) + (Number(r.frete) || 0) + viagensTotal;
 }
 
 // Monta a conta do Financeiro correspondente a um lançamento de Produção —
@@ -4122,23 +4132,19 @@ const emptyProducao = () => ({
   id: uid(),
   pedido: "",
   data: "",
-  equipamento: "",
-  qtdDias: 1,
-  valorDiaria: "",
-  frete: "",
-  tipoFrete: "Leva",
-  motoristaFrete: "",
-  caminhaoFrete: "",
-  operador: "",
+  equipamento: "", // combinação FCK + Brita, montada automaticamente ao salvar
+  fck: "",
+  brita: "",
+  qtdDias: 1, // usado como "Metro cúbico" na tela
+  valorDiaria: "", // usado como "Valor metro cúbico" na tela
+  frete: "", // usado como "Bomba" na tela
+  operador: "", // preenchido automaticamente com o motorista
+  motorista: "",
+  placa: "",
   vendedor: "",
   status: "EM ABERTO",
   total: 0,
   metragem: "",
-  retiradaMaterial: "",
-  empresaRetirada: "",
-  qtdRetirada: "",
-  valorReceberRetirada: "",
-  valorPagarRetirada: "",
   viagens: [],
   formaPagamento: "", // obrigatório quando status = PAGO
   valorPago: "", // se for menor que o total, é pagamento parcial
@@ -4213,7 +4219,6 @@ function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords,
   const save = (record) => {
     const cliente = clienteByPedido.get(String(record.pedido).trim());
     const viagensTotal = (record.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
-    const totalReceberRetirada = (Number(record.valorReceberRetirada) || 0) * (Number(record.qtdRetirada) || 1);
     const enriched = {
       ...record,
       // Só sobrescreve cliente/endereço quando há um cadastro correspondente em Clientes.
@@ -4223,26 +4228,11 @@ function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords,
       total:
         (Number(record.qtdDias) || 0) * (Number(record.valorDiaria) || 0) +
         (Number(record.frete) || 0) +
-        viagensTotal +
-        (record.retiradaMaterial ? totalReceberRetirada : 0),
+        viagensTotal,
     };
     const exists = records.some((r) => r.id === record.id);
     onChange(exists ? records.map((r) => (r.id === record.id ? enriched : r)) : [...records, enriched]);
     setEditing(null);
-  };
-
-  // Copia um lançamento que já tem frete de "Leva", trocando pra "Traz" —
-  // pra registrar a viagem de volta sem digitar tudo de novo. O motorista
-  // e caminhão ficam em branco, já que costuma ser outra equipe.
-  const duplicarComoTraz = (record) => {
-    setEditing({
-      ...record,
-      id: uid(),
-      tipoFrete: "Traz",
-      motoristaFrete: "",
-      caminhaoFrete: "",
-      status: "EM ABERTO",
-    });
   };
 
   const remove = (id) => {
@@ -4393,11 +4383,6 @@ function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords,
                   <button onClick={() => setViewing(r)} className="tl-focus" style={iconBtnStyle} title="Ver relatório do pedido">
                     <Eye size={14} />
                   </button>
-                  {numeroSeguro(r.frete) > 0 && (
-                    <button onClick={() => duplicarComoTraz(r)} className="tl-focus" style={iconBtnStyle} title="Duplicar como frete de volta (Traz)">
-                      <Copy size={14} />
-                    </button>
-                  )}
                   <RowActions onEdit={() => setEditing(r)} onDelete={() => setDeleting(r)} />
                 </div>
               </td>
@@ -4729,9 +4714,18 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
           }
           setErroValidacao("");
           limparRascunho("producao");
+          // "Equipamento" (usado nos relatórios) vira a combinação de FCK +
+          // Brita; "Operador" vira o motorista — assim os relatórios que já
+          // existem continuam funcionando sem precisar mudar em outro lugar.
+          const equipamentoMontado = [form.fck, form.brita].filter(Boolean).join(" - ");
+          const dadosFinais = {
+            ...form,
+            equipamento: equipamentoMontado || form.equipamento,
+            operador: form.motorista || form.operador,
+          };
           // Se "valor pago" ficou em branco, salva com o total atual (pagamento
           // integral) — assim nunca grava vazio, mesmo sem o usuário mexer no campo.
-          onSave(ehPago && form.valorPago === "" ? { ...form, valorPago: total } : form);
+          onSave(ehPago && form.valorPago === "" ? { ...dadosFinais, valorPago: total } : dadosFinais);
         }}
       >
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
@@ -4803,14 +4797,28 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-          <Field label="Equipamento">
-            <Select value={form.equipamento} onChange={set("equipamento")}>
-              <option value="">Selecionar</option>
-              {equipamentos.map((eq) => (
-                <option key={eq} value={eq}>{eq}</option>
-              ))}
-            </Select>
+          <Field label="FCK" hint="Ex: FCK 25, FCK 30">
+            <Input value={form.fck} onChange={set("fck")} list="lista-fck" />
+            <datalist id="lista-fck">
+              <option value="FCK 15" />
+              <option value="FCK 20" />
+              <option value="FCK 25" />
+              <option value="FCK 30" />
+              <option value="FCK 35" />
+              <option value="FCK 40" />
+            </datalist>
           </Field>
+          <Field label="Brita" hint="Ex: Brita 0, Brita 1">
+            <Input value={form.brita} onChange={set("brita")} list="lista-brita" />
+            <datalist id="lista-brita">
+              <option value="Brita 0" />
+              <option value="Brita 1" />
+              <option value="Brita 2" />
+            </datalist>
+          </Field>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
           <Field label="Status">
             <Select value={form.status} onChange={set("status")}>
               {Object.keys(STATUS_STYLES).map((s) => (
@@ -4850,49 +4858,33 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 16px" }}>
-          <Field label="Qtd. de dias">
-            <Input type="number" min="0" value={form.qtdDias} onChange={set("qtdDias")} />
+          <Field label="Metro cúbico">
+            <Input type="number" min="0" step="0.1" value={form.qtdDias} onChange={set("qtdDias")} />
           </Field>
-          <Field label="Valor diária (R$)">
+          <Field label="Valor metro cúbico (R$)">
             <Input type="number" min="0" step="0.01" value={form.valorDiaria} onChange={set("valorDiaria")} />
           </Field>
-          <Field label="Frete (R$)">
+          <Field label="Bomba (R$)">
             <Input type="number" min="0" step="0.01" value={form.frete} onChange={set("frete")} />
           </Field>
         </div>
 
-        {numeroSeguro(form.frete) > 0 && (
-          <>
-            <Field label="Tipo de frete">
-              <Select value={form.tipoFrete} onChange={set("tipoFrete")}>
-                <option value="Leva">Leva (entrega a máquina no cliente)</option>
-                <option value="Traz">Traz (retorno/busca da máquina)</option>
-              </Select>
-            </Field>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-              <Field label="Motorista do frete">
-                <Input value={form.motoristaFrete} onChange={set("motoristaFrete")} list="lista-motoristas" />
-                <datalist id="lista-motoristas">
-                  {porNome(motoristas).map((m) => <option key={m.id} value={m.nome} />)}
-                </datalist>
-              </Field>
-              <Field label="Caminhão do frete">
-                <Input placeholder="Placa ou identificação" value={form.caminhaoFrete} onChange={set("caminhaoFrete")} list="lista-caminhoes" />
-                <datalist id="lista-caminhoes">
-                  {porNome(caminhoes).map((c) => <option key={c.id} value={c.nome} />)}
-                </datalist>
-              </Field>
-            </div>
-          </>
-        )}
-
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-          <Field label="Operador">
-            <Input value={form.operador} onChange={set("operador")} list="lista-operadores" />
-            <datalist id="lista-operadores">
-              {(operadores || []).map((o) => <option key={o.id} value={o.nome} />)}
+          <Field label="Motorista">
+            <Input value={form.motorista} onChange={set("motorista")} list="lista-motoristas" />
+            <datalist id="lista-motoristas">
+              {porNome(motoristas).map((m) => <option key={m.id} value={m.nome} />)}
             </datalist>
           </Field>
+          <Field label="Placa">
+            <Input value={form.placa} onChange={set("placa")} list="lista-caminhoes" />
+            <datalist id="lista-caminhoes">
+              {porNome(caminhoes).map((c) => <option key={c.id} value={c.nome} />)}
+            </datalist>
+          </Field>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
           <Field label="Vendedor">
             <Input value={form.vendedor} onChange={set("vendedor")} list="lista-vendedores" />
             <datalist id="lista-vendedores">
@@ -4903,41 +4895,6 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
 
         {isEscavadeira && (
           <>
-            <Field label="Retirada de material" hint="Fica vinculada ao cliente do pedido">
-              <Input placeholder="Ex: 3 caçambas de argila" value={form.retiradaMaterial} onChange={set("retiradaMaterial")} />
-            </Field>
-
-            {form.retiradaMaterial && (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-                  <Field label="Empresa/pessoa que retirou">
-                    <Input value={form.empresaRetirada} onChange={set("empresaRetirada")} list="lista-empresas-retirada" />
-                    <datalist id="lista-empresas-retirada">
-                      {porNome(empresasRetirada).map((e) => <option key={e.id} value={e.nome} />)}
-                    </datalist>
-                  </Field>
-                  <Field label="Quantidade" hint="Ex: nº de caçambas ou m³">
-                    <Input type="number" min="0" step="0.1" value={form.qtdRetirada} onChange={set("qtdRetirada")} />
-                  </Field>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-                  <Field label="Valor a receber (por carga)" hint="O que você cobra do cliente por carga">
-                    <Input type="number" min="0" step="0.01" value={form.valorReceberRetirada} onChange={set("valorReceberRetirada")} />
-                  </Field>
-                  <Field label="Valor a pagar (por carga)" hint="O que você paga pra empresa/pessoa que retirou">
-                    <Input type="number" min="0" step="0.01" value={form.valorPagarRetirada} onChange={set("valorPagarRetirada")} />
-                  </Field>
-                </div>
-                {(numeroSeguro(form.valorReceberRetirada) > 0 || numeroSeguro(form.valorPagarRetirada) > 0) && (
-                  <div style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "6px", padding: "10px 12px", marginBottom: "16px", fontSize: "12.5px", color: "var(--text-muted)" }}>
-                    {numeroSeguro(form.qtdRetirada) || 1}x carga(s) — a receber: <strong style={{ color: "var(--text-primary)" }}>{money(numeroSeguro(form.valorReceberRetirada) * (numeroSeguro(form.qtdRetirada) || 1))}</strong>
-                    {" · "}a pagar: <strong style={{ color: "var(--text-primary)" }}>{money(numeroSeguro(form.valorPagarRetirada) * (numeroSeguro(form.qtdRetirada) || 1))}</strong>
-                    {" · "}lucro: <strong style={{ color: "var(--success)" }}>{money((numeroSeguro(form.valorReceberRetirada) - numeroSeguro(form.valorPagarRetirada)) * (numeroSeguro(form.qtdRetirada) || 1))}</strong>
-                  </div>
-                )}
-              </>
-            )}
-
             <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Viagens (valor pago por viagem)</span>
               <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Viagem</Button>
@@ -5240,16 +5197,19 @@ function PropostaForm({ initial, clienteByPedido, onSave, onClose }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "18px" }}>
-          {form.itens.map((it) => (
+          {form.itens.map((it) => {
+            const ehConcreto = /fck/i.test(it.descricao || "");
+            return (
             <div key={it.id} style={{ display: "grid", gridTemplateColumns: "2fr 70px 110px 32px", gap: "8px", alignItems: "center" }}>
               <Input placeholder="Descrição do serviço" value={it.descricao} onChange={(e) => setItem(it.id, "descricao", e.target.value)} />
-              <Input type="number" min="0" placeholder="Qtd" value={it.qtd} onChange={(e) => setItem(it.id, "qtd", e.target.value)} />
+              <Input type="number" min="0" placeholder={ehConcreto ? "m³" : "Qtd"} value={it.qtd} onChange={(e) => setItem(it.id, "qtd", e.target.value)} />
               <Input type="number" min="0" step="0.01" placeholder="Valor unit." value={it.valorUnit} onChange={(e) => setItem(it.id, "valorUnit", e.target.value)} />
               <button type="button" onClick={() => removeItem(it.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
                 <X size={13} />
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <Field label="Observação">
@@ -8709,7 +8669,7 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
       ],
     },
     {
-      titulo: "Produção",
+      titulo: "Produção-Concreto",
       icon: Truck,
       destino: "producaoEsc",
       itens: [
@@ -10174,7 +10134,7 @@ function FinanceiroModule({ contas, clientes, clienteByPedido, producaoEsc, prod
         {[
           { id: "receber", label: "A Receber", icon: TrendingUp, qtd: qtdReceber },
           { id: "pagar", label: "A Pagar", icon: TrendingDown, qtd: qtdPagar },
-          { id: "producaoEsc", label: "Produção", icon: Truck, qtd: producaoEsc.length },
+          { id: "producaoEsc", label: "Produção-Concreto", icon: Truck, qtd: producaoEsc.length },
           { id: "relatorio", label: "Relatório", icon: BarChart2 },
         ].map((t) => (
           <button
@@ -11273,10 +11233,27 @@ const TIPOS_ELEMENTO_CONCRETO = ["Laje", "Viga", "Pilar", "Sapata", "Fundação/
 
 const emptyElementoConcreto = () => ({ id: uid(), tipo: "Laje", descricao: "", comprimento: "", largura: "", altura: "", quantidade: 1 });
 
-function CalculadoraModule() {
+function CalculadoraModule({ cubicagens, clienteByPedido, onChange }) {
+  const [pedido, setPedido] = useState("");
   const [elementos, setElementos] = useState([emptyElementoConcreto()]);
   const [percentualPerda, setPercentualPerda] = useState("5");
   const [capacidadeCaminhao, setCapacidadeCaminhao] = useState("8");
+  const [salvo, setSalvo] = useState(false);
+
+  // Se o pedido digitado já tiver uma cubicagem salva, carrega ela sozinho
+  // — assim reabrir o mesmo pedido depois traz o cálculo de volta.
+  useEffect(() => {
+    if (!pedido.trim()) return;
+    const existente = (cubicagens || []).find((c) => String(c.pedido).trim() === pedido.trim());
+    if (existente) {
+      setElementos(existente.elementos.length > 0 ? existente.elementos : [emptyElementoConcreto()]);
+      setPercentualPerda(existente.percentualPerda);
+      setCapacidadeCaminhao(existente.capacidadeCaminhao);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedido]);
+
+  const clienteDoPedido = pedido.trim() ? clienteByPedido.get(pedido.trim()) : null;
 
   const setElemento = (id, k, v) => setElementos(elementos.map((el) => (el.id === id ? { ...el, [k]: v } : el)));
   const addElemento = () => setElementos([...elementos, emptyElementoConcreto()]);
@@ -11289,12 +11266,41 @@ function CalculadoraModule() {
   const capacidade = Number(capacidadeCaminhao) || 0;
   const viagens = capacidade > 0 ? Math.ceil(volumeComPerda / capacidade) : 0;
 
+  const salvarNoPedido = () => {
+    if (!pedido.trim()) return;
+    const alvo = pedido.trim();
+    const registro = { id: uid(), pedido: alvo, elementos, percentualPerda, capacidadeCaminhao, volumeComPerda, atualizadoEm: new Date().toISOString() };
+    const existente = (cubicagens || []).find((c) => String(c.pedido).trim() === alvo);
+    const novaLista = existente
+      ? (cubicagens || []).map((c) => (c.pedido === existente.pedido ? { ...registro, id: existente.id } : c))
+      : [...(cubicagens || []), registro];
+    onChange(novaLista);
+    setSalvo(true);
+    setTimeout(() => setSalvo(false), 2000);
+  };
+
   return (
     <div className="tl-fade-in">
       <PageHeader eyebrow="Planejamento de obra" title="Cubicagem de Concretagem" action={<Button icon={Plus} onClick={addElemento}>Adicionar elemento</Button>} />
-      <p style={{ fontSize: "12.5px", color: "var(--text-faint)", marginBottom: "20px", maxWidth: "620px" }}>
+      <p style={{ fontSize: "12.5px", color: "var(--text-faint)", marginBottom: "16px", maxWidth: "620px" }}>
         Some o volume de concreto de cada elemento da obra (laje, viga, pilar, sapata...) e veja o total necessário, já considerando uma margem de perda e quantas viagens de caminhão-betoneira isso representa.
       </p>
+
+      <div style={{ background: "var(--bg-panel)", border: "1px solid var(--border-soft)", borderRadius: "9px", padding: "16px 18px", marginBottom: "20px", maxWidth: "620px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0 16px", alignItems: "flex-end" }}>
+          <Field label="Nº do pedido" hint="Vincula esse cálculo ao pedido — digite um já existente pra recarregar o cálculo salvo">
+            <Input value={pedido} onChange={(e) => setPedido(e.target.value)} placeholder="Ex: 620" />
+          </Field>
+          <Button type="button" icon={Save} disabled={!pedido.trim()} onClick={salvarNoPedido} style={{ marginBottom: "16px" }}>
+            {salvo ? "Salvo!" : "Salvar no pedido"}
+          </Button>
+        </div>
+        {clienteDoPedido && (
+          <div style={{ fontSize: "12.5px", color: "var(--text-muted)" }}>
+            Cliente: <strong style={{ color: "var(--text-primary)" }}>{clienteDoPedido.nome}</strong>
+          </div>
+        )}
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: "20px", maxWidth: "920px" }}>
         <div style={{ background: "var(--bg-panel)", border: "1px solid var(--border-soft)", borderRadius: "9px", padding: "18px" }}>
