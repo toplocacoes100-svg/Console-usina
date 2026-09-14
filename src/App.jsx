@@ -1816,6 +1816,7 @@ const NAV_ITEMS = [
   { id: "divulgacao", label: "Divulgação", icon: Megaphone },
   { id: "producaoEsc", label: "Produção-Concreto", icon: Truck },
   { id: "bombaConcreto", label: "Bomba de Concreto", icon: Droplet },
+  { id: "centralBalanca", label: "Central de Balança", icon: Gauge },
   { id: "propostas", label: "Propostas", icon: FileText },
   { id: "manutencao", label: "Manutenção", icon: Wrench },
   { id: "agenda", label: "Agenda", icon: Calendar },
@@ -2597,6 +2598,13 @@ export default function App() {
               onChange={(next) => persist(STORAGE_KEYS.bombaConcreto, setBombaConcreto, next)}
             />
           )}
+          {tab === "centralBalanca" && (
+            <CentralBalancaModule
+              producaoEsc={producaoEsc}
+              clienteByPedido={clienteByPedido}
+              onChangeProducaoEsc={(next) => persist(STORAGE_KEYS.producaoEsc, setProducaoEsc, next)}
+            />
+          )}
           {tab === "despesas" && (
             <DespesasModule
               despesas={despesas}
@@ -3344,6 +3352,24 @@ function enderecoCompleto(cliente) {
 // entra à parte, direto (não é multiplicada pelo volume).
 function subtotalCarga(v) {
   return (Number(v.volume) || 0) * (Number(v.valor) || 0);
+}
+
+// Recalcula "metro cúbico" e "total" de um lançamento a partir das cargas
+// que ele tem — usada tanto ao editar o lançamento quanto ao editar as
+// cargas direto pela Central de Balança, pra nunca ficar desalinhado.
+function recalcularComCargas(record) {
+  const viagens = record.viagens || [];
+  const viagensTotal = viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
+  const volumeCargas = viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0);
+  const temCargasComValor = viagens.some((v) => numeroSeguro(v.valor) > 0 || numeroSeguro(v.valorBomba) > 0);
+  const metroCubicoEfetivo = volumeCargas > 0 ? volumeCargas : Number(record.qtdDias) || 0;
+  return {
+    ...record,
+    qtdDias: volumeCargas > 0 ? metroCubicoEfetivo : record.qtdDias,
+    total: temCargasComValor
+      ? viagensTotal + (Number(record.frete) || 0)
+      : metroCubicoEfetivo * (Number(record.valorDiaria) || 0) + (Number(record.frete) || 0) + viagensTotal,
+  };
 }
 
 function calcularTotalProducao(r) {
@@ -4272,23 +4298,13 @@ function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords,
 
   const save = (record) => {
     const cliente = clienteByPedido.get(String(record.pedido).trim());
-    const viagens = record.viagens || [];
-    const viagensTotal = viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
-    const volumeCargas = viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0);
-    const temCargasComValor = viagens.some((v) => numeroSeguro(v.valor) > 0 || numeroSeguro(v.valorBomba) > 0);
-    const metroCubicoEfetivo = volumeCargas > 0 ? volumeCargas : Number(record.qtdDias) || 0;
+    const comCargas = recalcularComCargas(record);
     const enriched = {
-      ...record,
+      ...comCargas,
       // Só sobrescreve cliente/endereço quando há um cadastro correspondente em Clientes.
       // Sem isso, editar um pedido antigo sem cadastro formal apagaria o nome já salvo.
       cliente: cliente ? cliente.nome : (record.cliente || "-"),
       endereco: cliente ? cliente.endereco : (record.endereco || "-"),
-      // Se as cargas já vieram com valor cada uma, o total é a soma delas
-      // (não multiplica de novo por "valor metro cúbico", senão duplicava).
-      qtdDias: volumeCargas > 0 ? metroCubicoEfetivo : record.qtdDias,
-      total: temCargasComValor
-        ? viagensTotal + (Number(record.frete) || 0)
-        : metroCubicoEfetivo * (Number(record.valorDiaria) || 0) + (Number(record.frete) || 0) + viagensTotal,
     };
     const exists = records.some((r) => r.id === record.id);
     onChange(exists ? records.map((r) => (r.id === record.id ? enriched : r)) : [...records, enriched]);
@@ -4784,8 +4800,6 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const [rascunhoRecuperado] = useState(() => !!initial.__rascunho);
   const [abaAtiva, setAbaAtiva] = useState("lancamento");
   const [erroValidacao, setErroValidacao] = useState("");
-  const [imprimindoCarga, setImprimindoCarga] = useState(null); // índice da carga sendo impressa
-  const [cargaAberta, setCargaAberta] = useState(null); // índice da carga expandida (só uma por vez, pra não poluir a tela)
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   useEffect(() => {
@@ -4795,21 +4809,10 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const matched = clienteByPedido.get(String(form.pedido).trim());
   const fallbackNome = !matched && form.cliente && form.cliente !== "-" ? form.cliente : null;
   const fallbackEndereco = !matched && form.endereco && form.endereco !== "-" ? form.endereco : null;
+  // As cargas em si agora são editadas na Central de Balança — aqui só
+  // usamos o que já existe pra calcular o total exibido corretamente.
   const viagens = form.viagens || [];
-  const viagensTotal = viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
-  // Se existir alguma carga com volume preenchido, o "Metro cúbico" do
-  // pedido passa a ser a SOMA das cargas — assim produção e financeiro
-  // sempre batem certinho com o que realmente saiu, carga por carga.
-  const volumeCargas = viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0);
-  const temCargasComValor = viagens.some((v) => numeroSeguro(v.valor) > 0 || numeroSeguro(v.valorBomba) > 0);
-  const metroCubicoEfetivo = volumeCargas > 0 ? volumeCargas : Number(form.qtdDias) || 0;
-  // Se as cargas já têm valor próprio, o total do pedido é a soma delas —
-  // não multiplica de novo por "valor metro cúbico" (senão contaria em
-  // dobro). Só usa qtd × valor unitário quando o lançamento é feito de
-  // forma simples, sem detalhar carga por carga.
-  const total = temCargasComValor
-    ? viagensTotal + (Number(form.frete) || 0)
-    : metroCubicoEfetivo * (Number(form.valorDiaria) || 0) + (Number(form.frete) || 0) + viagensTotal;
+  const total = recalcularComCargas(form).total;
   const ehPago = form.status === "PAGO";
   // Se o campo "valor pago" ainda não foi digitado, assume o total ATUAL
   // (recalculado a cada mudança) — não trava num valor antigo se a pessoa
@@ -4838,30 +4841,6 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
       valor: String((Number(it.qtd) || 0) * (Number(it.valorUnit) || 0)),
     }));
     setForm({ ...form, viagens: [...viagens, ...novasViagens] });
-  };
-
-  const setViagem = (id, k, v) => setForm({ ...form, viagens: viagens.map((it) => (it.id === id ? { ...it, [k]: v } : it)) });
-  const addViagem = () => {
-    const nova = emptyViagem();
-    setForm({ ...form, viagens: [...viagens, nova] });
-    setCargaAberta(viagens.length); // abre a recém-criada
-  };
-  // Copia os dados da última carga (motorista e placa costumam se repetir
-  // no mesmo pedido) — só precisa ajustar horário e volume da próxima.
-  const duplicarUltimaCarga = () => {
-    const base = viagens[viagens.length - 1];
-    const nova = { ...emptyViagem(), placa: base?.placa || "", motorista: base?.motorista || "", volume: base?.volume || "", valor: base?.valor || "" };
-    setForm({ ...form, viagens: [...viagens, nova] });
-    setCargaAberta(viagens.length);
-  };
-  const removeViagem = (id) => {
-    setForm({ ...form, viagens: viagens.filter((it) => it.id !== id) });
-    setCargaAberta(null);
-  };
-  const resumoCarga = (v) => {
-    const subtotal = subtotalCarga(v);
-    const partes = [v.horario, v.placa, v.volume ? `${v.volume} m³` : "", subtotal > 0 ? money(subtotal) : ""].filter(Boolean);
-    return partes.length > 0 ? partes.join(" · ") : "Toca pra preencher";
   };
 
   return (
@@ -5068,21 +5047,6 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-          <Field label="Motorista">
-            <Input value={form.motorista} onChange={set("motorista")} list="lista-motoristas" />
-            <datalist id="lista-motoristas">
-              {porNome(motoristas).map((m) => <option key={m.id} value={m.nome} />)}
-            </datalist>
-          </Field>
-          <Field label="Placa">
-            <Input value={form.placa} onChange={set("placa")} list="lista-caminhoes" />
-            <datalist id="lista-caminhoes">
-              {porNome(caminhoes).map((c) => <option key={c.id} value={c.nome} />)}
-            </datalist>
-          </Field>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
           <Field label="Vendedor">
             <Input value={form.vendedor} onChange={set("vendedor")} list="lista-vendedores" />
             <datalist id="lista-vendedores">
@@ -5091,96 +5055,6 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
           </Field>
         </div>
 
-        {isEscavadeira && (
-          <>
-            <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Cargas de entrega (Ordens de Serviço)</span>
-              <div style={{ display: "flex", gap: "6px" }}>
-                {viagens.length > 0 && (
-                  <Button type="button" size="sm" variant="ghost" icon={Copy} onClick={duplicarUltimaCarga}>Repetir última</Button>
-                )}
-                <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Carga</Button>
-              </div>
-            </div>
-            <p style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "10px" }}>
-              Um pedido de concreto costuma sair em várias viagens de caminhão ao longo do dia. Cada carga clicada abre pra editar — o total soma sozinho no financeiro e na produção.
-            </p>
-            {viagens.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
-                {viagens.map((v, i) => {
-                  const aberta = cargaAberta === i;
-                  return (
-                  <div key={v.id} style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "8px", overflow: "hidden" }}>
-                    <div
-                      onClick={() => setCargaAberta(aberta ? null : i)}
-                      style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 10px", cursor: "pointer" }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                        <ChevronRight size={14} style={{ color: "var(--text-faint)", flexShrink: 0, transform: aberta ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
-                        <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", flexShrink: 0 }}>Carga {i + 1}</span>
-                        <span style={{ fontSize: "12px", color: "var(--text-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{resumoCarga(v)}</span>
-                      </div>
-                      <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                        <button type="button" onClick={() => setImprimindoCarga(i)} className="tl-focus" style={iconBtnStyle} title="Imprimir ordem de serviço dessa carga">
-                          <Printer size={13} />
-                        </button>
-                        <button type="button" onClick={() => removeViagem(v.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
-                          <X size={13} />
-                        </button>
-                      </div>
-                    </div>
-                    {aberta && (
-                      <div style={{ padding: "0 10px 12px 10px" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: "0 8px" }}>
-                          <Field label="Horário">
-                            <Input type="time" value={v.horario} onChange={(e) => setViagem(v.id, "horario", e.target.value)} />
-                          </Field>
-                          <Field label="Placa">
-                            <Input value={v.placa} onChange={(e) => setViagem(v.id, "placa", e.target.value)} />
-                          </Field>
-                          <Field label="Motorista">
-                            <Input value={v.motorista} onChange={(e) => setViagem(v.id, "motorista", e.target.value)} />
-                          </Field>
-                        </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
-                          <Field label="Volume (m³)">
-                            <Input type="number" min="0" step="0.1" value={v.volume} onChange={(e) => setViagem(v.id, "volume", e.target.value)} />
-                          </Field>
-                          <Field label="Valor por m³ (R$)">
-                            <Input type="number" min="0" step="0.01" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
-                          </Field>
-                        </div>
-                        {(numeroSeguro(v.volume) > 0 && numeroSeguro(v.valor) > 0) && (
-                          <div style={{ fontSize: "11px", color: "var(--text-faint)", textAlign: "right", marginBottom: "8px" }}>
-                            {v.volume} m³ × {money(v.valor)} = <strong style={{ color: "var(--text-muted)" }}>{money(subtotalCarga(v))}</strong>
-                          </div>
-                        )}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
-                          <Field label="Lacre" hint="Número do lacre dessa carga">
-                            <Input value={v.lacre} onChange={(e) => setViagem(v.id, "lacre", e.target.value)} />
-                          </Field>
-                          <Field label="Bomba nessa carga (R$)" hint="Deixa em branco se não teve">
-                            <Input type="number" min="0" step="0.01" value={v.valorBomba} onChange={(e) => setViagem(v.id, "valorBomba", e.target.value)} />
-                          </Field>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  );
-                })}
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", padding: "6px 2px", color: "var(--text-muted)" }}>
-                  <span>{viagens.length} carga(s) — {viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0).toFixed(1)} m³ entregues</span>
-                  <strong style={{ color: "var(--text-primary)" }}>
-                    {money(viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0))}
-                    {viagens.some((v) => numeroSeguro(v.valorBomba) > 0) && (
-                      <span style={{ fontWeight: 400, fontSize: "11px", color: "var(--text-faint)" }}> (inclui bomba)</span>
-                    )}
-                  </strong>
-                </div>
-              </div>
-            )}
-          </>
-        )}
 
         <div
           style={{
@@ -5204,16 +5078,6 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
         </div>
       </form>
     </Modal>
-
-    {imprimindoCarga !== null && viagens[imprimindoCarga] && (
-      <OrdemServicoCargaModal
-        carga={viagens[imprimindoCarga]}
-        indice={imprimindoCarga}
-        form={form}
-        cliente={matched || { nome: fallbackNome }}
-        onClose={() => setImprimindoCarga(null)}
-      />
-    )}
     </>
   );
 }
@@ -5268,6 +5132,173 @@ function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Tela dedicada da balança — digita o pedido, o sistema puxa cliente,
+// endereço e a especificação do concreto sozinho, e o operador só lança
+// cada carga que sai (horário, placa, motorista, volume, valor, lacre,
+// bomba). As cargas ficam salvas dentro do mesmo lançamento de Produção.
+function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEsc }) {
+  const [pedidoBusca, setPedidoBusca] = useState("");
+  const [cargaAberta, setCargaAberta] = useState(null);
+  const [imprimindoCarga, setImprimindoCarga] = useState(null);
+
+  const pedido = pedidoBusca.trim();
+  const lancamento = pedido ? producaoEsc.find((r) => String(r.pedido).trim() === pedido) : null;
+  const cliente = pedido ? clienteByPedido.get(pedido) : null;
+  const viagens = lancamento?.viagens || [];
+
+  const atualizarViagens = (novasViagens) => {
+    if (!lancamento) return;
+    const atualizado = recalcularComCargas({ ...lancamento, viagens: novasViagens });
+    onChangeProducaoEsc(producaoEsc.map((r) => (r.id === lancamento.id ? atualizado : r)));
+  };
+
+  const setViagem = (id, k, v) => atualizarViagens(viagens.map((it) => (it.id === id ? { ...it, [k]: v } : it)));
+  const addViagem = () => {
+    atualizarViagens([...viagens, emptyViagem()]);
+    setCargaAberta(viagens.length);
+  };
+  const duplicarUltimaCarga = () => {
+    const base = viagens[viagens.length - 1];
+    const nova = { ...emptyViagem(), placa: base?.placa || "", motorista: base?.motorista || "", volume: base?.volume || "", valor: base?.valor || "" };
+    atualizarViagens([...viagens, nova]);
+    setCargaAberta(viagens.length);
+  };
+  const removeViagem = (id) => {
+    atualizarViagens(viagens.filter((it) => it.id !== id));
+    setCargaAberta(null);
+  };
+  const resumoCarga = (v) => {
+    const subtotal = subtotalCarga(v);
+    const partes = [v.horario, v.placa, v.volume ? `${v.volume} m³` : "", subtotal > 0 ? money(subtotal) : ""].filter(Boolean);
+    return partes.length > 0 ? partes.join(" · ") : "Toca pra preencher";
+  };
+
+  return (
+    <div className="tl-fade-in">
+      <PageHeader eyebrow="Operação" title="Central de Balança" />
+      <div style={{ maxWidth: "640px" }}>
+        <Field label="Nº do pedido" hint="Digita o pedido já lançado em Produção-Concreto">
+          <Input value={pedidoBusca} onChange={(e) => setPedidoBusca(e.target.value)} placeholder="Ex: 620" style={{ fontSize: "16px" }} />
+        </Field>
+
+        {pedido && !lancamento && (
+          <EmptyState icon={Truck} title="Nenhum lançamento encontrado com esse pedido" hint="Cadastra o lançamento em Produção-Concreto primeiro (FCK, brita, slump, valor) — depois volta aqui pra lançar as cargas." />
+        )}
+
+        {lancamento && (
+          <>
+            <div style={{ background: "var(--bg-panel)", border: "1px solid var(--border-soft)", borderRadius: "9px", padding: "14px 16px", marginBottom: "18px" }}>
+              <div style={{ fontWeight: 700, fontSize: "15px", marginBottom: "2px" }}>{cliente ? cliente.nome : lancamento.cliente || "-"}</div>
+              <div style={{ fontSize: "12.5px", color: "var(--text-muted)", marginBottom: "8px" }}>{cliente ? enderecoCompleto(cliente) : lancamento.endereco || "-"}</div>
+              <div style={{ fontSize: "12.5px", color: "var(--text-muted)" }}>
+                {[lancamento.fck, lancamento.brita, lancamento.slump ? `SLUMP ${lancamento.slump}` : ""].filter(Boolean).join(" · ") || "Sem especificação de concreto lançada"}
+                {lancamento.peca ? `  ·  Peça: ${lancamento.peca}` : ""}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Cargas de entrega (Ordens de Serviço)</span>
+              <div style={{ display: "flex", gap: "6px" }}>
+                {viagens.length > 0 && (
+                  <Button type="button" size="sm" variant="ghost" icon={Copy} onClick={duplicarUltimaCarga}>Repetir última</Button>
+                )}
+                <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Carga</Button>
+              </div>
+            </div>
+
+            {viagens.length === 0 ? (
+              <EmptyState icon={Truck} title="Nenhuma carga lançada ainda pra esse pedido" hint='Clica em "Carga" pra registrar a primeira viagem de caminhão.' />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                {viagens.map((v, i) => {
+                  const aberta = cargaAberta === i;
+                  return (
+                    <div key={v.id} style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "8px", overflow: "hidden" }}>
+                      <div
+                        onClick={() => setCargaAberta(aberta ? null : i)}
+                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 10px", cursor: "pointer" }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                          <ChevronRight size={14} style={{ color: "var(--text-faint)", flexShrink: 0, transform: aberta ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", flexShrink: 0 }}>Carga {i + 1}</span>
+                          <span style={{ fontSize: "12px", color: "var(--text-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{resumoCarga(v)}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                          <button type="button" onClick={() => setImprimindoCarga(i)} className="tl-focus" style={iconBtnStyle} title="Imprimir ordem de serviço dessa carga">
+                            <Printer size={13} />
+                          </button>
+                          <button type="button" onClick={() => removeViagem(v.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                      {aberta && (
+                        <div style={{ padding: "0 10px 12px 10px" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: "0 8px" }}>
+                            <Field label="Horário">
+                              <Input type="time" value={v.horario} onChange={(e) => setViagem(v.id, "horario", e.target.value)} />
+                            </Field>
+                            <Field label="Placa">
+                              <Input value={v.placa} onChange={(e) => setViagem(v.id, "placa", e.target.value)} />
+                            </Field>
+                            <Field label="Motorista">
+                              <Input value={v.motorista} onChange={(e) => setViagem(v.id, "motorista", e.target.value)} />
+                            </Field>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
+                            <Field label="Volume (m³)">
+                              <Input type="number" min="0" step="0.1" value={v.volume} onChange={(e) => setViagem(v.id, "volume", e.target.value)} />
+                            </Field>
+                            <Field label="Valor por m³ (R$)">
+                              <Input type="number" min="0" step="0.01" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
+                            </Field>
+                          </div>
+                          {(numeroSeguro(v.volume) > 0 && numeroSeguro(v.valor) > 0) && (
+                            <div style={{ fontSize: "11px", color: "var(--text-faint)", textAlign: "right", marginBottom: "8px" }}>
+                              {v.volume} m³ × {money(v.valor)} = <strong style={{ color: "var(--text-muted)" }}>{money(subtotalCarga(v))}</strong>
+                            </div>
+                          )}
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
+                            <Field label="Lacre" hint="Número do lacre dessa carga">
+                              <Input value={v.lacre} onChange={(e) => setViagem(v.id, "lacre", e.target.value)} />
+                            </Field>
+                            <Field label="Bomba nessa carga (R$)" hint="Deixa em branco se não teve">
+                              <Input type="number" min="0" step="0.01" value={v.valorBomba} onChange={(e) => setViagem(v.id, "valorBomba", e.target.value)} />
+                            </Field>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", padding: "6px 2px", color: "var(--text-muted)" }}>
+                  <span>{viagens.length} carga(s) — {viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0).toFixed(1)} m³ entregues</span>
+                  <strong style={{ color: "var(--text-primary)" }}>
+                    {money(viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0))}
+                    {viagens.some((v) => numeroSeguro(v.valorBomba) > 0) && (
+                      <span style={{ fontWeight: 400, fontSize: "11px", color: "var(--text-faint)" }}> (inclui bomba)</span>
+                    )}
+                  </strong>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {imprimindoCarga !== null && viagens[imprimindoCarga] && (
+        <OrdemServicoCargaModal
+          carga={viagens[imprimindoCarga]}
+          indice={imprimindoCarga}
+          form={lancamento}
+          cliente={cliente}
+          onClose={() => setImprimindoCarga(null)}
+        />
+      )}
+    </div>
   );
 }
 
