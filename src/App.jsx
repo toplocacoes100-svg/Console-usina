@@ -4773,6 +4773,7 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const [rascunhoRecuperado] = useState(() => !!initial.__rascunho);
   const [abaAtiva, setAbaAtiva] = useState("lancamento");
   const [erroValidacao, setErroValidacao] = useState("");
+  const [imprimindoCarga, setImprimindoCarga] = useState(null); // índice da carga sendo impressa
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   useEffect(() => {
@@ -4832,6 +4833,7 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const removeViagem = (id) => setForm({ ...form, viagens: viagens.filter((it) => it.id !== id) });
 
   return (
+    <>
     <Modal title={initial.equipamento ? "Editar lançamento" : "Novo lançamento"} onClose={() => { limparRascunho("producao"); onClose(); }} wide>
       {rascunhoRecuperado && <RascunhoBanner />}
 
@@ -5072,9 +5074,14 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
                   <div key={v.id} style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "6px", padding: "10px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                       <span style={{ fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)" }}>Carga {i + 1}</span>
-                      <button type="button" onClick={() => removeViagem(v.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
-                        <X size={13} />
-                      </button>
+                      <div style={{ display: "flex", gap: "4px" }}>
+                        <button type="button" onClick={() => setImprimindoCarga(i)} className="tl-focus" style={iconBtnStyle} title="Imprimir ordem de serviço dessa carga">
+                          <Printer size={13} />
+                        </button>
+                        <button type="button" onClick={() => removeViagem(v.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
+                          <X size={13} />
+                        </button>
+                      </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: "0 8px" }}>
                       <Field label="Horário">
@@ -5127,6 +5134,59 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
           <Button type="submit">Salvar lançamento</Button>
         </div>
       </form>
+    </Modal>
+
+    {imprimindoCarga !== null && viagens[imprimindoCarga] && (
+      <OrdemServicoCargaModal
+        carga={viagens[imprimindoCarga]}
+        indice={imprimindoCarga}
+        form={form}
+        cliente={matched || { nome: fallbackNome }}
+        onClose={() => setImprimindoCarga(null)}
+      />
+    )}
+    </>
+  );
+}
+
+// Ordem de serviço de UMA carga específica — pronta pra imprimir. Os dados
+// continuam salvos dentro do lançamento de Produção (pedido original); isso
+// só formata essa carga sozinha pra impressão, sem duplicar nada.
+function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
+  return (
+    <Modal title={`Ordem de Serviço — Carga ${indice + 1}`} onClose={onClose} wide>
+      <div style={{ marginBottom: "16px" }}>
+        <Button icon={Printer} onClick={() => window.print()}>Imprimir</Button>
+      </div>
+      <div className="tl-print-area" style={{ padding: "4px" }}>
+        <div style={{ textAlign: "center", marginBottom: "18px", borderBottom: "2px solid #333", paddingBottom: "12px" }}>
+          <div style={{ fontWeight: 800, fontSize: "17px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+          <div style={{ fontSize: "13px", color: "#555", marginTop: "4px" }}>ORDEM DE SERVIÇO — CARGA {indice + 1}</div>
+        </div>
+        <div style={{ fontSize: "13px", lineHeight: 2.1 }}>
+          <div><strong>PEDIDO</strong> &nbsp; #{form.pedido || "-"}{form.pedidoCliente ? `  ·  Pedido cliente: ${form.pedidoCliente}` : ""}</div>
+          <div><strong>DATA</strong> &nbsp; {fmtDate(form.data)}{carga.horario ? `  às  ${carga.horario}` : ""}</div>
+          <div><strong>CLIENTE</strong> &nbsp; {cliente?.nome || form.cliente || "-"}</div>
+          <div><strong>ENDEREÇO</strong> &nbsp; {cliente ? enderecoCompleto(cliente) : form.endereco || "-"}</div>
+          <div>
+            <strong>CONCRETO</strong> &nbsp; {[form.fck, form.brita, form.slump ? `SLUMP ${form.slump}` : ""].filter(Boolean).join(" - ") || "-"}
+            {form.peca ? `  ·  Peça: ${form.peca}` : ""}
+          </div>
+          <div style={{ borderTop: "1px solid #ccc", marginTop: "8px", paddingTop: "8px" }}>
+            <strong>VOLUME DESSA CARGA</strong> &nbsp; {carga.volume || "-"} m³
+          </div>
+          <div><strong>VALOR DESSA CARGA</strong> &nbsp; {money(carga.valor)}</div>
+          <div style={{ borderTop: "1px solid #ccc", marginTop: "8px", paddingTop: "8px" }}>
+            <strong>MOTORISTA</strong> &nbsp; {carga.motorista || "-"}
+          </div>
+          <div><strong>PLACA</strong> &nbsp; {carga.placa || "-"}</div>
+          <div><strong>VENDEDOR</strong> &nbsp; {form.vendedor || "-"}</div>
+        </div>
+        <div style={{ marginTop: "60px", display: "flex", justifyContent: "space-between", gap: "40px" }}>
+          <div style={{ flex: 1, borderTop: "1px solid #333", paddingTop: "6px", textAlign: "center", fontSize: "11px", color: "#555" }}>Assinatura do motorista</div>
+          <div style={{ flex: 1, borderTop: "1px solid #333", paddingTop: "6px", textAlign: "center", fontSize: "11px", color: "#555" }}>Assinatura do cliente</div>
+        </div>
+      </div>
     </Modal>
   );
 }
