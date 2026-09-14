@@ -2745,20 +2745,14 @@ function Sidebar({ tab, setTab, locked, usuarioAtual, onLogout, naoLidas, prefs 
             50% { transform: scale(1.05); filter: drop-shadow(0 0 6px rgba(232,166,61,0.45)); }
           }
         `}</style>
-        {prefs?.logoPersonalizado ? (
-          <img
-            src={prefs.logoPersonalizado}
-            alt="Logo"
-            style={{ width: "58px", height: "58px", borderRadius: "9px", flexShrink: 0, background: "#F5F2E9" }}
-          />
-        ) : (
-          <div style={{ width: "58px", height: "58px", borderRadius: "9px", flexShrink: 0, background: "var(--bg-base)", border: "1px solid var(--border-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Truck size={26} style={{ color: "var(--amber)" }} />
-          </div>
-        )}
+        <img
+          src={LOGO_DATA_URI()}
+          alt="Logo"
+          style={{ width: "58px", height: "58px", borderRadius: "9px", flexShrink: 0, background: "#F5F2E9", objectFit: "contain" }}
+        />
         <div>
           <div className="tl-display" style={{ fontSize: "17px", fontWeight: 800, letterSpacing: "0.01em", lineHeight: 1.2 }}>
-            {prefs?.nomeEmpresa || "Console Operacional"}
+            {prefs?.nomeEmpresa || "RJL Mix Concreto"}
           </div>
           <div className="tl-mono" style={{ fontSize: "9.5px", color: "var(--text-faint)", marginTop: "4px", letterSpacing: "0.05em" }}>
             CONSOLE OPERACIONAL
@@ -3347,7 +3341,10 @@ function enderecoCompleto(cliente) {
 // formulário de edição) — usado pra conferir se o "valor pago" salvo bate
 // com o que deveria ser, mesmo fora do formulário.
 function calcularTotalProducao(r) {
-  const viagensTotal = (r.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
+  const viagens = r.viagens || [];
+  const viagensTotal = viagens.reduce((s, v) => s + (Number(v.valor) || 0), 0);
+  const temCargasComValor = viagens.some((v) => (Number(v.valor) || 0) > 0);
+  if (temCargasComValor) return viagensTotal + (Number(r.frete) || 0);
   return (Number(r.qtdDias) || 0) * (Number(r.valorDiaria) || 0) + (Number(r.frete) || 0) + viagensTotal;
 }
 
@@ -4195,7 +4192,7 @@ const emptyProducao = () => ({
   valorPago: "", // se for menor que o total, é pagamento parcial
   dataProximoPagamento: "", // obrigatório se o pagamento ficou parcial
 });
-const emptyViagem = () => ({ id: uid(), descricao: "", valor: "" });
+const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", descricao: "", valor: "" });
 
 function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords, clienteByPedido, operadores, vendedores, motoristas, caminhoes, empresasRetirada, propostas, todasProducaoEsc, todasProducaoPerf, financeiro, ticks, onChange, onGerarProposta }) {
   const [editing, setEditing] = useState(null);
@@ -4264,17 +4261,23 @@ function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords,
 
   const save = (record) => {
     const cliente = clienteByPedido.get(String(record.pedido).trim());
-    const viagensTotal = (record.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
+    const viagens = record.viagens || [];
+    const viagensTotal = viagens.reduce((s, v) => s + (Number(v.valor) || 0), 0);
+    const volumeCargas = viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0);
+    const temCargasComValor = viagens.some((v) => numeroSeguro(v.valor) > 0);
+    const metroCubicoEfetivo = volumeCargas > 0 ? volumeCargas : Number(record.qtdDias) || 0;
     const enriched = {
       ...record,
       // Só sobrescreve cliente/endereço quando há um cadastro correspondente em Clientes.
       // Sem isso, editar um pedido antigo sem cadastro formal apagaria o nome já salvo.
       cliente: cliente ? cliente.nome : (record.cliente || "-"),
       endereco: cliente ? cliente.endereco : (record.endereco || "-"),
-      total:
-        (Number(record.qtdDias) || 0) * (Number(record.valorDiaria) || 0) +
-        (Number(record.frete) || 0) +
-        viagensTotal,
+      // Se as cargas já vieram com valor cada uma, o total é a soma delas
+      // (não multiplica de novo por "valor metro cúbico", senão duplicava).
+      qtdDias: volumeCargas > 0 ? metroCubicoEfetivo : record.qtdDias,
+      total: temCargasComValor
+        ? viagensTotal + (Number(record.frete) || 0)
+        : metroCubicoEfetivo * (Number(record.valorDiaria) || 0) + (Number(record.frete) || 0) + viagensTotal,
     };
     const exists = records.some((r) => r.id === record.id);
     onChange(exists ? records.map((r) => (r.id === record.id ? enriched : r)) : [...records, enriched]);
@@ -4781,8 +4784,19 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const fallbackEndereco = !matched && form.endereco && form.endereco !== "-" ? form.endereco : null;
   const viagens = form.viagens || [];
   const viagensTotal = viagens.reduce((s, v) => s + (Number(v.valor) || 0), 0);
-  const totalReceberRetirada = (Number(form.valorReceberRetirada) || 0) * (Number(form.qtdRetirada) || 1);
-  const total = (Number(form.qtdDias) || 0) * (Number(form.valorDiaria) || 0) + (Number(form.frete) || 0) + viagensTotal + (form.retiradaMaterial ? totalReceberRetirada : 0);
+  // Se existir alguma carga com volume preenchido, o "Metro cúbico" do
+  // pedido passa a ser a SOMA das cargas — assim produção e financeiro
+  // sempre batem certinho com o que realmente saiu, carga por carga.
+  const volumeCargas = viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0);
+  const temCargasComValor = viagens.some((v) => numeroSeguro(v.valor) > 0);
+  const metroCubicoEfetivo = volumeCargas > 0 ? volumeCargas : Number(form.qtdDias) || 0;
+  // Se as cargas já têm valor próprio, o total do pedido é a soma delas —
+  // não multiplica de novo por "valor metro cúbico" (senão contaria em
+  // dobro). Só usa qtd × valor unitário quando o lançamento é feito de
+  // forma simples, sem detalhar carga por carga.
+  const total = temCargasComValor
+    ? viagensTotal + (Number(form.frete) || 0)
+    : metroCubicoEfetivo * (Number(form.valorDiaria) || 0) + (Number(form.frete) || 0) + viagensTotal;
   const ehPago = form.status === "PAGO";
   // Se o campo "valor pago" ainda não foi digitado, assume o total ATUAL
   // (recalculado a cada mudança) — não trava num valor antigo se a pessoa
@@ -5046,20 +5060,47 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
         {isEscavadeira && (
           <>
             <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Viagens (valor pago por viagem)</span>
-              <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Viagem</Button>
+              <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Cargas de entrega (Ordens de Serviço)</span>
+              <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Carga</Button>
             </div>
+            <p style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "10px" }}>
+              Um pedido de concreto costuma sair em várias viagens de caminhão ao longo do dia — lança cada carga aqui, com o volume e o valor daquela viagem. O total soma sozinho no financeiro e na produção.
+            </p>
             {viagens.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "18px" }}>
-                {viagens.map((v) => (
-                  <div key={v.id} style={{ display: "grid", gridTemplateColumns: "2fr 120px 32px", gap: "8px", alignItems: "center" }}>
-                    <Input placeholder="Descrição (ex: 1ª viagem, retirada de terra)" value={v.descricao} onChange={(e) => setViagem(v.id, "descricao", e.target.value)} />
-                    <Input type="number" min="0" step="0.01" placeholder="Valor pago" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
-                    <button type="button" onClick={() => removeViagem(v.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
-                      <X size={13} />
-                    </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "10px" }}>
+                {viagens.map((v, i) => (
+                  <div key={v.id} style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "6px", padding: "10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                      <span style={{ fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)" }}>Carga {i + 1}</span>
+                      <button type="button" onClick={() => removeViagem(v.id)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }}>
+                        <X size={13} />
+                      </button>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: "0 8px" }}>
+                      <Field label="Horário">
+                        <Input type="time" value={v.horario} onChange={(e) => setViagem(v.id, "horario", e.target.value)} />
+                      </Field>
+                      <Field label="Placa">
+                        <Input value={v.placa} onChange={(e) => setViagem(v.id, "placa", e.target.value)} />
+                      </Field>
+                      <Field label="Motorista">
+                        <Input value={v.motorista} onChange={(e) => setViagem(v.id, "motorista", e.target.value)} />
+                      </Field>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
+                      <Field label="Volume (m³)">
+                        <Input type="number" min="0" step="0.1" value={v.volume} onChange={(e) => setViagem(v.id, "volume", e.target.value)} />
+                      </Field>
+                      <Field label="Valor (R$)">
+                        <Input type="number" min="0" step="0.01" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
+                      </Field>
+                    </div>
                   </div>
                 ))}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", padding: "6px 2px", color: "var(--text-muted)" }}>
+                  <span>{viagens.length} carga(s) — {viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0).toFixed(1)} m³ entregues</span>
+                  <strong style={{ color: "var(--text-primary)" }}>{money(viagens.reduce((s, v) => s + (Number(v.valor) || 0), 0))}</strong>
+                </div>
               </div>
             )}
           </>
@@ -8957,7 +8998,6 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
           { id: "comparativo", label: "Comparativo mensal" },
           { id: "operadores", label: "Produtividade" },
           { id: "vendedores", label: "Vendedores" },
-          { id: "maquinas", label: "Diárias por máquina" },
           { id: "frete", label: "Frete" },
         ].map((t) => (
           <button
@@ -8987,7 +9027,6 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
       {subTab === "comparativo" && <ComparativoMensalSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "operadores" && <ProdutividadeOperadorSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "vendedores" && <VendedoresSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
-      {subTab === "maquinas" && <DiariasMaquinaSection maquinas={maquinas} producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "frete" && <FreteSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
 
       {subTab === "resumo" && (
@@ -9521,102 +9560,6 @@ function VendedoresSection({ producaoEsc, producaoPerf }) {
   );
 }
 
-function DiariasMaquinaSection({ maquinas, producaoEsc, producaoPerf }) {
-  const [mesFiltro, setMesFiltro] = useState("todos");
-  const [verDatas, setVerDatas] = useState(null); // nome da máquina selecionada
-
-  const mesesDisponiveis = useMemo(() => {
-    const todaProducao = [...(producaoEsc || []), ...(producaoPerf || [])];
-    const meses = new Set(todaProducao.map((r) => dataOrdenavel(r.data).slice(0, 7)).filter(Boolean));
-    return [...meses].sort().reverse();
-  }, [producaoEsc, producaoPerf]);
-
-  const linhas = useMemo(() => {
-    const todaProducao = [...(producaoEsc || []), ...(producaoPerf || [])].filter((r) => {
-      if (mesFiltro === "todos") return true;
-      return dataOrdenavel(r.data).slice(0, 7) === mesFiltro;
-    });
-    const mapa = new Map();
-    todaProducao.forEach((r) => {
-      const nome = String(r.equipamento || "").trim();
-      if (!nome) return;
-      if (!mapa.has(nome)) mapa.set(nome, { nome, diarias: 0, datas: [] });
-      const acc = mapa.get(nome);
-      acc.diarias += Number(r.qtdDias) || 0;
-      if (r.data) acc.datas.push({ data: r.data, dias: Number(r.qtdDias) || 0, cliente: r.cliente || "-" });
-    });
-    // Não inclui máquinas sem nenhum lançamento no período — só aparece
-    // quem realmente trabalhou (teve diária > 0) nesse período.
-    return [...mapa.values()]
-      .filter((l) => l.diarias > 0)
-      .map((l) => ({ ...l, datas: l.datas.sort((a, b) => dataOrdenavel(b.data).localeCompare(dataOrdenavel(a.data))) }))
-      .sort((a, b) => b.diarias - a.diarias);
-  }, [producaoEsc, producaoPerf, mesFiltro]);
-
-  const totalDiarias = linhas.reduce((s, l) => s + l.diarias, 0);
-  const maquinaSelecionada = linhas.find((l) => l.nome === verDatas);
-
-  return (
-    <div>
-      <p style={{ fontSize: "12.5px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "560px" }}>
-        As diárias somam o campo "Qtd. dias" de cada lançamento de Produção, agrupado por equipamento. Só aparece quem teve pelo menos 1 diária no período selecionado.
-      </p>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
-        <MiniStat label="Total de diárias no período" valor={totalDiarias} />
-        <Select value={mesFiltro} onChange={(e) => setMesFiltro(e.target.value)} style={{ width: "180px" }}>
-          <option value="todos">Todo período</option>
-          {mesesDisponiveis.map((m) => (
-            <option key={m} value={m}>{new Date(`${m}-01T00:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</option>
-          ))}
-        </Select>
-      </div>
-      {linhas.length === 0 ? (
-        <EmptyState icon={Wrench} title="Sem dados suficientes" hint="Cadastre máquinas e lançamentos de Produção pra ver as diárias." />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-          {linhas.map((l) => (
-            <button
-              key={l.nome}
-              onClick={() => l.datas.length > 0 && setVerDatas(l.nome)}
-              className="tl-focus"
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "11px 14px",
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-soft)",
-                borderRadius: "6px",
-                marginBottom: "5px",
-                cursor: l.datas.length > 0 ? "pointer" : "default",
-                width: "100%",
-                textAlign: "left",
-              }}
-            >
-              <span style={{ fontWeight: 500, fontSize: "13.5px" }}>{l.nome}</span>
-              <span className="tl-mono" style={{ fontWeight: 700, color: l.diarias > 0 ? "var(--text-primary)" : "var(--text-faint)" }}>
-                {l.diarias} diária{l.diarias === 1 ? "" : "s"}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {maquinaSelecionada && (
-        <Modal title={`Diárias — ${maquinaSelecionada.nome}`} onClose={() => setVerDatas(null)}>
-          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            {maquinaSelecionada.datas.map((d, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--border-soft)", fontSize: "13px" }}>
-                <span>{fmtDate(d.data)} · {d.cliente}</span>
-                <strong className="tl-mono">{d.dias} dia{d.dias === 1 ? "" : "s"}</strong>
-              </div>
-            ))}
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
 
 function FreteSection({ producaoEsc, producaoPerf }) {
   const [verDetalhe, setVerDetalhe] = useState(null); // null | "todos" | nome do motorista
