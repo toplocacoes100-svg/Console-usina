@@ -3340,9 +3340,15 @@ function enderecoCompleto(cliente) {
 // Calcula o total de um lançamento de Produção genérico (mesma fórmula do
 // formulário de edição) — usado pra conferir se o "valor pago" salvo bate
 // com o que deveria ser, mesmo fora do formulário.
+// Subtotal de uma carga/viagem — volume × valor por m³. A bomba dessa carga
+// entra à parte, direto (não é multiplicada pelo volume).
+function subtotalCarga(v) {
+  return (Number(v.volume) || 0) * (Number(v.valor) || 0);
+}
+
 function calcularTotalProducao(r) {
   const viagens = r.viagens || [];
-  const viagensTotal = viagens.reduce((s, v) => s + (Number(v.valor) || 0) + (Number(v.valorBomba) || 0), 0);
+  const viagensTotal = viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
   const temCargasComValor = viagens.some((v) => (Number(v.valor) || 0) > 0 || (Number(v.valorBomba) || 0) > 0);
   if (temCargasComValor) return viagensTotal + (Number(r.frete) || 0);
   return (Number(r.qtdDias) || 0) * (Number(r.valorDiaria) || 0) + (Number(r.frete) || 0) + viagensTotal;
@@ -4267,7 +4273,7 @@ function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords,
   const save = (record) => {
     const cliente = clienteByPedido.get(String(record.pedido).trim());
     const viagens = record.viagens || [];
-    const viagensTotal = viagens.reduce((s, v) => s + (Number(v.valor) || 0) + (Number(v.valorBomba) || 0), 0);
+    const viagensTotal = viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
     const volumeCargas = viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0);
     const temCargasComValor = viagens.some((v) => numeroSeguro(v.valor) > 0 || numeroSeguro(v.valorBomba) > 0);
     const metroCubicoEfetivo = volumeCargas > 0 ? volumeCargas : Number(record.qtdDias) || 0;
@@ -4665,7 +4671,7 @@ function RelatorioGeralPedido({ pedido, cliente, producaoEsc, propostas, finance
                 <div style={{ fontSize: "11px", color: "#777", paddingLeft: "4px" }}>
                   Diária: {money(r.valorDiaria)} · Frete: {money(r.frete)}
                   {" · "}Retirada de material: {r.retiradaMaterial ? `Sim — ${r.retiradaMaterial}` : "Não"}
-                  {(r.viagens || []).length > 0 && ` · Viagens: ${r.viagens.length} (${money((r.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0))})`}
+                  {(r.viagens || []).length > 0 && ` · Viagens: ${r.viagens.length} (${money((r.viagens || []).reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0))})`}
                 </div>
               </div>
             ))}
@@ -4752,9 +4758,9 @@ function PedidoReport({ record, cliente, isPerfuratriz, isEscavadeira, onClose, 
       </div>
       {isEscavadeira && viagens.length > 0 && (
         <div style={{ marginTop: "14px" }}>
-          <div className="tl-mono" style={{ fontSize: "10.5px", color: "var(--text-faint)", textTransform: "uppercase", marginBottom: "2px" }}>Viagens</div>
-          {viagens.map((v) => (
-            <ReportRow key={v.id} label={v.descricao || "Viagem"} value={money(v.valor)} />
+          <div className="tl-mono" style={{ fontSize: "10.5px", color: "var(--text-faint)", textTransform: "uppercase", marginBottom: "2px" }}>Cargas de entrega</div>
+          {viagens.map((v, i) => (
+            <ReportRow key={v.id} label={[`Carga ${i + 1}`, v.horario, v.placa].filter(Boolean).join(" · ")} value={money(subtotalCarga(v) + (Number(v.valorBomba) || 0))} />
           ))}
         </div>
       )}
@@ -4790,7 +4796,7 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const fallbackNome = !matched && form.cliente && form.cliente !== "-" ? form.cliente : null;
   const fallbackEndereco = !matched && form.endereco && form.endereco !== "-" ? form.endereco : null;
   const viagens = form.viagens || [];
-  const viagensTotal = viagens.reduce((s, v) => s + (Number(v.valor) || 0) + (Number(v.valorBomba) || 0), 0);
+  const viagensTotal = viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
   // Se existir alguma carga com volume preenchido, o "Metro cúbico" do
   // pedido passa a ser a SOMA das cargas — assim produção e financeiro
   // sempre batem certinho com o que realmente saiu, carga por carga.
@@ -4853,7 +4859,8 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
     setCargaAberta(null);
   };
   const resumoCarga = (v) => {
-    const partes = [v.horario, v.placa, v.volume ? `${v.volume} m³` : "", v.valor ? money(v.valor) : ""].filter(Boolean);
+    const subtotal = subtotalCarga(v);
+    const partes = [v.horario, v.placa, v.volume ? `${v.volume} m³` : "", subtotal > 0 ? money(subtotal) : ""].filter(Boolean);
     return partes.length > 0 ? partes.join(" · ") : "Toca pra preencher";
   };
 
@@ -5139,10 +5146,15 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
                           <Field label="Volume (m³)">
                             <Input type="number" min="0" step="0.1" value={v.volume} onChange={(e) => setViagem(v.id, "volume", e.target.value)} />
                           </Field>
-                          <Field label="Valor (R$)">
+                          <Field label="Valor por m³ (R$)">
                             <Input type="number" min="0" step="0.01" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
                           </Field>
                         </div>
+                        {(numeroSeguro(v.volume) > 0 && numeroSeguro(v.valor) > 0) && (
+                          <div style={{ fontSize: "11px", color: "var(--text-faint)", textAlign: "right", marginBottom: "8px" }}>
+                            {v.volume} m³ × {money(v.valor)} = <strong style={{ color: "var(--text-muted)" }}>{money(subtotalCarga(v))}</strong>
+                          </div>
+                        )}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
                           <Field label="Lacre" hint="Número do lacre dessa carga">
                             <Input value={v.lacre} onChange={(e) => setViagem(v.id, "lacre", e.target.value)} />
@@ -5159,7 +5171,7 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", padding: "6px 2px", color: "var(--text-muted)" }}>
                   <span>{viagens.length} carga(s) — {viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0).toFixed(1)} m³ entregues</span>
                   <strong style={{ color: "var(--text-primary)" }}>
-                    {money(viagens.reduce((s, v) => s + (Number(v.valor) || 0) + (Number(v.valorBomba) || 0), 0))}
+                    {money(viagens.reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0))}
                     {viagens.some((v) => numeroSeguro(v.valorBomba) > 0) && (
                       <span style={{ fontWeight: 400, fontSize: "11px", color: "var(--text-faint)" }}> (inclui bomba)</span>
                     )}
@@ -5216,9 +5228,17 @@ function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
         <Button icon={Printer} onClick={() => window.print()}>Imprimir</Button>
       </div>
       <div className="tl-print-area" style={{ padding: "4px" }}>
-        <div style={{ textAlign: "center", marginBottom: "18px", borderBottom: "2px solid #333", paddingBottom: "12px" }}>
-          <div style={{ fontWeight: 800, fontSize: "17px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
-          <div style={{ fontSize: "13px", color: "#555", marginTop: "4px" }}>ORDEM DE SERVIÇO — CARGA {indice + 1}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "14px", marginBottom: "18px", borderBottom: "2px solid #333", paddingBottom: "12px" }}>
+          <img src={LOGO_DATA_URI()} alt="" style={{ width: "52px", height: "52px", objectFit: "contain", flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: "17px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+            {(PREFS_ATUAL_REF?.cnpjEmpresa || PREFS_ATUAL_REF?.enderecoEmpresa) && (
+              <div style={{ fontSize: "10.5px", color: "#666", marginTop: "2px" }}>
+                {[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ")}
+              </div>
+            )}
+          </div>
+          <div style={{ textAlign: "right", fontSize: "13px", color: "#555", fontWeight: 700 }}>ORDEM DE SERVIÇO<br /><span style={{ fontWeight: 400, fontSize: "11px" }}>Carga {indice + 1}</span></div>
         </div>
         <div style={{ fontSize: "13px", lineHeight: 2.1 }}>
           <div><strong>PEDIDO</strong> &nbsp; #{form.pedido || "-"}{form.pedidoCliente ? `  ·  Pedido cliente: ${form.pedidoCliente}` : ""}</div>
@@ -5230,11 +5250,11 @@ function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
             {form.peca ? `  ·  Peça: ${form.peca}` : ""}
           </div>
           <div style={{ borderTop: "1px solid #ccc", marginTop: "8px", paddingTop: "8px" }}>
-            <strong>VOLUME DESSA CARGA</strong> &nbsp; {carga.volume || "-"} m³
+            <strong>VOLUME</strong> &nbsp; {carga.volume || "-"} m³
           </div>
-          <div><strong>VALOR DESSA CARGA</strong> &nbsp; {money(carga.valor)}</div>
+          <div><strong>VALOR</strong> &nbsp; {money(subtotalCarga(carga))}</div>
           {numeroSeguro(carga.valorBomba) > 0 && (
-            <div><strong>BOMBA NESSA CARGA</strong> &nbsp; {money(carga.valorBomba)}</div>
+            <div><strong>BOMBA</strong> &nbsp; {money(carga.valorBomba)}</div>
           )}
           <div><strong>LACRE</strong> &nbsp; {carga.lacre || "-"}</div>
           <div style={{ borderTop: "1px solid #ccc", marginTop: "8px", paddingTop: "8px" }}>
@@ -5243,9 +5263,8 @@ function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
           <div><strong>PLACA</strong> &nbsp; {carga.placa || "-"}</div>
           <div><strong>VENDEDOR</strong> &nbsp; {form.vendedor || "-"}</div>
         </div>
-        <div style={{ marginTop: "60px", display: "flex", justifyContent: "space-between", gap: "40px" }}>
-          <div style={{ flex: 1, borderTop: "1px solid #333", paddingTop: "6px", textAlign: "center", fontSize: "11px", color: "#555" }}>Assinatura do motorista</div>
-          <div style={{ flex: 1, borderTop: "1px solid #333", paddingTop: "6px", textAlign: "center", fontSize: "11px", color: "#555" }}>Assinatura do cliente</div>
+        <div style={{ marginTop: "60px" }}>
+          <div style={{ maxWidth: "260px", borderTop: "1px solid #333", paddingTop: "6px", textAlign: "center", fontSize: "11px", color: "#555" }}>Assinatura do cliente</div>
         </div>
       </div>
     </Modal>
@@ -10371,7 +10390,7 @@ function EmitirReciboModal({ clienteByPedido, producaoEsc, producaoPerf, onEmiti
   const totalDiarias = lancamentos.reduce((s, r) => s + numeroSeguro(r.valorDiaria), 0);
   const comRetirada = lancamentos.filter((r) => r.retiradaMaterial).length;
   const totalViagens = lancamentos.reduce((s, r) => s + (r.viagens || []).length, 0);
-  const valorViagens = lancamentos.reduce((s, r) => s + (r.viagens || []).reduce((s2, v) => s2 + (Number(v.valor) || 0), 0), 0);
+  const valorViagens = lancamentos.reduce((s, r) => s + (r.viagens || []).reduce((s2, v) => s2 + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0), 0);
   const totalGeralLancamentos = lancamentos.reduce((s, r) => s + numeroSeguro(r.total), 0);
 
   // Preenche valor e descrição sozinho a partir do que foi encontrado —
@@ -10574,7 +10593,7 @@ function ReciboView({ conta, cliente, onClose }) {
           conta.producaoDetalhe.forEach((r) => {
             if (numeroSeguro(r.valorDiaria) > 0) itensRecibo.push({ label: `${r.tipoEquip || "Diária"} — ${fmtDate(r.data)}`, valor: numeroSeguro(r.valorDiaria) });
             if (numeroSeguro(r.frete) > 0) itensRecibo.push({ label: `Frete — ${fmtDate(r.data)}`, valor: numeroSeguro(r.frete) });
-            const viagensTotal = (r.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
+            const viagensTotal = (r.viagens || []).reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
             if (viagensTotal > 0) itensRecibo.push({ label: `Viagens — ${fmtDate(r.data)}`, valor: viagensTotal });
           });
           const totalItens = itensRecibo.reduce((s, it) => s + it.valor, 0);
