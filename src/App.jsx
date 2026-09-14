@@ -1978,11 +1978,11 @@ export default function App() {
         loadCollection(STORAGE_KEYS.caminhoes),
         loadCollection(STORAGE_KEYS.empresasRetirada),
         loadCollection(STORAGE_KEYS.galeriaDivulgacao),
+        loadCollection(STORAGE_KEYS.mensagens),
         loadCollection(STORAGE_KEYS.cubicagens),
         loadCollection(STORAGE_KEYS.comprasMaterial),
         loadCollection(STORAGE_KEYS.movimentosEstoque),
         loadCollection(STORAGE_KEYS.bombaConcreto),
-        loadCollection(STORAGE_KEYS.mensagens),
       ]);
 
       try {
@@ -2067,6 +2067,11 @@ export default function App() {
         [STORAGE_KEYS.caminhoes]: JSON.stringify(cam),
         [STORAGE_KEYS.empresasRetirada]: JSON.stringify(empR),
         [STORAGE_KEYS.galeriaDivulgacao]: JSON.stringify(galDiv),
+        [STORAGE_KEYS.mensagens]: JSON.stringify(msgs),
+        [STORAGE_KEYS.cubicagens]: JSON.stringify(cub),
+        [STORAGE_KEYS.comprasMaterial]: JSON.stringify(comprMat),
+        [STORAGE_KEYS.movimentosEstoque]: JSON.stringify(movEst),
+        [STORAGE_KEYS.bombaConcreto]: JSON.stringify(bombaC),
       };
 
       console.log("[TopLocacoes] App: todas as coleções carregadas com sucesso!");
@@ -4774,6 +4779,7 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const [abaAtiva, setAbaAtiva] = useState("lancamento");
   const [erroValidacao, setErroValidacao] = useState("");
   const [imprimindoCarga, setImprimindoCarga] = useState(null); // índice da carga sendo impressa
+  const [cargaAberta, setCargaAberta] = useState(null); // índice da carga expandida (só uma por vez, pra não poluir a tela)
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   useEffect(() => {
@@ -4829,8 +4835,27 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   };
 
   const setViagem = (id, k, v) => setForm({ ...form, viagens: viagens.map((it) => (it.id === id ? { ...it, [k]: v } : it)) });
-  const addViagem = () => setForm({ ...form, viagens: [...viagens, emptyViagem()] });
-  const removeViagem = (id) => setForm({ ...form, viagens: viagens.filter((it) => it.id !== id) });
+  const addViagem = () => {
+    const nova = emptyViagem();
+    setForm({ ...form, viagens: [...viagens, nova] });
+    setCargaAberta(viagens.length); // abre a recém-criada
+  };
+  // Copia os dados da última carga (motorista e placa costumam se repetir
+  // no mesmo pedido) — só precisa ajustar horário e volume da próxima.
+  const duplicarUltimaCarga = () => {
+    const base = viagens[viagens.length - 1];
+    const nova = { ...emptyViagem(), placa: base?.placa || "", motorista: base?.motorista || "", volume: base?.volume || "", valor: base?.valor || "" };
+    setForm({ ...form, viagens: [...viagens, nova] });
+    setCargaAberta(viagens.length);
+  };
+  const removeViagem = (id) => {
+    setForm({ ...form, viagens: viagens.filter((it) => it.id !== id) });
+    setCargaAberta(null);
+  };
+  const resumoCarga = (v) => {
+    const partes = [v.horario, v.placa, v.volume ? `${v.volume} m³` : "", v.valor ? money(v.valor) : ""].filter(Boolean);
+    return partes.length > 0 ? partes.join(" · ") : "Toca pra preencher";
+  };
 
   return (
     <>
@@ -5063,18 +5088,32 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
           <>
             <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Cargas de entrega (Ordens de Serviço)</span>
-              <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Carga</Button>
+              <div style={{ display: "flex", gap: "6px" }}>
+                {viagens.length > 0 && (
+                  <Button type="button" size="sm" variant="ghost" icon={Copy} onClick={duplicarUltimaCarga}>Repetir última</Button>
+                )}
+                <Button type="button" size="sm" variant="subtle" icon={Plus} onClick={addViagem}>Carga</Button>
+              </div>
             </div>
             <p style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "10px" }}>
-              Um pedido de concreto costuma sair em várias viagens de caminhão ao longo do dia — lança cada carga aqui, com o volume e o valor daquela viagem. O total soma sozinho no financeiro e na produção.
+              Um pedido de concreto costuma sair em várias viagens de caminhão ao longo do dia. Cada carga clicada abre pra editar — o total soma sozinho no financeiro e na produção.
             </p>
             {viagens.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "10px" }}>
-                {viagens.map((v, i) => (
-                  <div key={v.id} style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "6px", padding: "10px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                      <span style={{ fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)" }}>Carga {i + 1}</span>
-                      <div style={{ display: "flex", gap: "4px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                {viagens.map((v, i) => {
+                  const aberta = cargaAberta === i;
+                  return (
+                  <div key={v.id} style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "8px", overflow: "hidden" }}>
+                    <div
+                      onClick={() => setCargaAberta(aberta ? null : i)}
+                      style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 10px", cursor: "pointer" }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                        <ChevronRight size={14} style={{ color: "var(--text-faint)", flexShrink: 0, transform: aberta ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+                        <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", flexShrink: 0 }}>Carga {i + 1}</span>
+                        <span style={{ fontSize: "12px", color: "var(--text-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{resumoCarga(v)}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
                         <button type="button" onClick={() => setImprimindoCarga(i)} className="tl-focus" style={iconBtnStyle} title="Imprimir ordem de serviço dessa carga">
                           <Printer size={13} />
                         </button>
@@ -5083,35 +5122,40 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
                         </button>
                       </div>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: "0 8px" }}>
-                      <Field label="Horário">
-                        <Input type="time" value={v.horario} onChange={(e) => setViagem(v.id, "horario", e.target.value)} />
-                      </Field>
-                      <Field label="Placa">
-                        <Input value={v.placa} onChange={(e) => setViagem(v.id, "placa", e.target.value)} />
-                      </Field>
-                      <Field label="Motorista">
-                        <Input value={v.motorista} onChange={(e) => setViagem(v.id, "motorista", e.target.value)} />
-                      </Field>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
-                      <Field label="Volume (m³)">
-                        <Input type="number" min="0" step="0.1" value={v.volume} onChange={(e) => setViagem(v.id, "volume", e.target.value)} />
-                      </Field>
-                      <Field label="Valor (R$)">
-                        <Input type="number" min="0" step="0.01" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
-                      </Field>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
-                      <Field label="Lacre" hint="Número do lacre dessa carga">
-                        <Input value={v.lacre} onChange={(e) => setViagem(v.id, "lacre", e.target.value)} />
-                      </Field>
-                      <Field label="Bomba nessa carga (R$)" hint="Deixa em branco se não teve">
-                        <Input type="number" min="0" step="0.01" value={v.valorBomba} onChange={(e) => setViagem(v.id, "valorBomba", e.target.value)} />
-                      </Field>
-                    </div>
+                    {aberta && (
+                      <div style={{ padding: "0 10px 12px 10px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: "0 8px" }}>
+                          <Field label="Horário">
+                            <Input type="time" value={v.horario} onChange={(e) => setViagem(v.id, "horario", e.target.value)} />
+                          </Field>
+                          <Field label="Placa">
+                            <Input value={v.placa} onChange={(e) => setViagem(v.id, "placa", e.target.value)} />
+                          </Field>
+                          <Field label="Motorista">
+                            <Input value={v.motorista} onChange={(e) => setViagem(v.id, "motorista", e.target.value)} />
+                          </Field>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
+                          <Field label="Volume (m³)">
+                            <Input type="number" min="0" step="0.1" value={v.volume} onChange={(e) => setViagem(v.id, "volume", e.target.value)} />
+                          </Field>
+                          <Field label="Valor (R$)">
+                            <Input type="number" min="0" step="0.01" value={v.valor} onChange={(e) => setViagem(v.id, "valor", e.target.value)} />
+                          </Field>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 8px" }}>
+                          <Field label="Lacre" hint="Número do lacre dessa carga">
+                            <Input value={v.lacre} onChange={(e) => setViagem(v.id, "lacre", e.target.value)} />
+                          </Field>
+                          <Field label="Bomba nessa carga (R$)" hint="Deixa em branco se não teve">
+                            <Input type="number" min="0" step="0.01" value={v.valorBomba} onChange={(e) => setViagem(v.id, "valorBomba", e.target.value)} />
+                          </Field>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", padding: "6px 2px", color: "var(--text-muted)" }}>
                   <span>{viagens.length} carga(s) — {viagens.reduce((s, v) => s + (Number(v.volume) || 0), 0).toFixed(1)} m³ entregues</span>
                   <strong style={{ color: "var(--text-primary)" }}>
@@ -8407,7 +8451,7 @@ function OperadoresManager({ itens, onChange }) {
 
 function CadastroSimples({ titulo, itens, onChange, comTipo, placeholder }) {
   const [novoNome, setNovoNome] = useState("");
-  const [novoTipo, setNovoTipo] = useState("Escavadeira");
+  const [novoTipo, setNovoTipo] = useState("Betoneira Estacionária");
 
   const adicionar = (e) => {
     e.preventDefault();
@@ -8439,8 +8483,8 @@ function CadastroSimples({ titulo, itens, onChange, comTipo, placeholder }) {
         <Input value={novoNome} onChange={(e) => setNovoNome(e.target.value)} placeholder={placeholder || "Nome"} style={{ flex: "1 1 140px", minWidth: "140px" }} />
         {comTipo && (
           <Select value={novoTipo} onChange={(e) => setNovoTipo(e.target.value)} style={{ flex: "1 1 130px", minWidth: "130px" }}>
-            <option>Escavadeira</option>
-            <option>Mini Carregadeira</option>
+            <option>Betoneira Estacionária</option>
+            <option>Caminhão Betoneira</option>
             <option>Outro</option>
           </Select>
         )}
@@ -12737,6 +12781,20 @@ function BetoneiraAndando() {
   );
 }
 
+// Mascote da betoneira em tamanho pequeno, com uma leve animação de "pulo"
+// — usada no tour de boas-vindas e no botão de ajuda flutuante.
+function Betoneirinha({ tamanho = 64, animando = true }) {
+  return (
+    <div style={{ width: tamanho, height: tamanho, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <style>{`
+        @keyframes betBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+        .bet-corpo { animation: ${animando ? "betBounce 2.2s ease-in-out infinite" : "none"}; }
+      `}</style>
+      <img src={MASCOTE_BETONEIRA_URI} alt="" className="bet-corpo" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+    </div>
+  );
+}
+
 function Escavadeirinha({ tamanho = 64, animando = true }) {
   return (
     <svg width={tamanho} height={tamanho} viewBox="0 0 100 100" style={{ display: "block" }}>
@@ -12806,7 +12864,7 @@ function MascoteTour({ onFechar }) {
         }}
       >
         <div style={{ display: "flex", gap: "14px", alignItems: "flex-start" }}>
-          <Escavadeirinha tamanho={64} />
+          <Betoneirinha tamanho={64} />
           <div style={{ flex: 1 }}>
             <h3 className="tl-display" style={{ fontSize: "17px", fontWeight: 700, marginBottom: "6px" }}>{atual.titulo}</h3>
             <p style={{ fontSize: "13.5px", color: "var(--text-muted)", lineHeight: 1.6 }}>{atual.texto}</p>
@@ -12869,7 +12927,7 @@ function BotaoAjudaMascote({ onAbrir }) {
         padding: 0,
       }}
     >
-      <Escavadeirinha tamanho={40} />
+      <Betoneirinha tamanho={40} />
     </button>
   );
 }
