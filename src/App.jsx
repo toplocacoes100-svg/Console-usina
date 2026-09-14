@@ -5144,6 +5144,13 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
   const [cargaAberta, setCargaAberta] = useState(null);
   const [imprimindoCarga, setImprimindoCarga] = useState(null);
 
+  const hoje = new Date().toISOString().slice(0, 10);
+  const producaoDoDia = useMemo(() => {
+    return producaoEsc
+      .filter((r) => r.data === hoje)
+      .sort((a, b) => (a.horario || "").localeCompare(b.horario || ""));
+  }, [producaoEsc, hoje]);
+
   const pedido = pedidoBusca.trim();
   const lancamento = pedido ? producaoEsc.find((r) => String(r.pedido).trim() === pedido) : null;
   const cliente = pedido ? clienteByPedido.get(pedido) : null;
@@ -5179,8 +5186,53 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
   return (
     <div className="tl-fade-in">
       <PageHeader eyebrow="Operação" title="Central de Balança" />
+
+      <div style={{ marginBottom: "22px" }}>
+        <h4 className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "10px" }}>Produção de hoje</h4>
+        {producaoDoDia.length === 0 ? (
+          <p style={{ fontSize: "12.5px", color: "var(--text-faint)" }}>Nenhum pedido lançado ainda pra hoje.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxWidth: "720px" }}>
+            {producaoDoDia.map((r) => {
+              const cli = clienteByPedido.get(String(r.pedido).trim());
+              const selecionado = pedido === String(r.pedido).trim();
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setPedidoBusca(String(r.pedido).trim())}
+                  className="tl-focus"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: selecionado ? "1px solid var(--accent)" : "1px solid var(--border-soft)",
+                    background: selecionado ? "var(--bg-panel-raised)" : "var(--bg-panel)",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                    <PedidoStub n={r.pedido} />
+                    <span style={{ fontWeight: 600, fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cli ? cli.nome : r.cliente || "-"}</span>
+                    <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>{[r.fck, r.brita].filter(Boolean).join(" · ")}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+                    <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{(r.viagens || []).length} carga(s)</span>
+                    <StatusBadge status={r.status} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div style={{ maxWidth: "640px" }}>
-        <Field label="Nº do pedido" hint="Digita o pedido já lançado em Produção-Concreto">
+        <Field label="Nº do pedido" hint="Digita o pedido, ou clica em um da lista acima">
           <Input value={pedidoBusca} onChange={(e) => setPedidoBusca(e.target.value)} placeholder="Ex: 620" style={{ fontSize: "16px" }} />
         </Field>
 
