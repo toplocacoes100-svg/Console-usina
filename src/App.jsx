@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { storage } from "./firebase";
 import {
   LayoutDashboard,
   Users,
@@ -13,6 +12,7 @@ import {
   X,
   Search,
   Droplet,
+  Beaker,
   ShoppingCart,
   Boxes,
   Save,
@@ -32,6 +32,7 @@ import {
   Eye,
   EyeOff,
   MessageCircle,
+  CheckCircle2,
   MessageSquare,
   Mail,
   Ruler,
@@ -211,6 +212,8 @@ const STORAGE_KEYS = {
   comprasMaterial: "top-locacoes:compras-material",
   movimentosEstoque: "top-locacoes:movimentos-estoque",
   bombaConcreto: "top-locacoes:bomba-concreto",
+  cartaTraco: "top-locacoes:carta-traco",
+  registrosDiesel: "top-locacoes:registros-diesel",
   mensagens: "top-locacoes:mensagens",
   usuarios: "top-locacoes:usuarios",
   logAcessos: "top-locacoes:log-acessos",
@@ -228,7 +231,7 @@ async function loadCollection(key) {
   // cima do que já existia — apagando tudo sem querer numa falha
   // passageira de conexão. Lista vazia só pode significar "realmente não
   // tem nada salvo ainda", nunca "não consegui checar agora".
-  const result = await storage.get(key);
+  const result = await window.storage.get(key, true);
   return result ? JSON.parse(result.value) : [];
 }
 
@@ -245,7 +248,7 @@ async function saveCollection(key, data) {
       erro.tamanho = json.length;
       throw erro;
     }
-    const result = await storage.set(key, json);
+    const result = await window.storage.set(key, json, true);
     return !!result;
   } catch (e) {
     console.error("Erro ao salvar", key, e);
@@ -346,7 +349,7 @@ async function baixarBackupExcel() {
 
 async function savePhotoBlob(id, dataUrl) {
   try {
-    const result = await storage.set(`foto:${id}`, dataUrl);
+    const result = await window.storage.set(`foto:${id}`, dataUrl, true);
     return !!result;
   } catch (e) {
     console.error("Erro ao salvar foto", e);
@@ -356,7 +359,7 @@ async function savePhotoBlob(id, dataUrl) {
 
 async function loadPhotoBlob(id) {
   try {
-    const result = await storage.get(`foto:${id}`);
+    const result = await window.storage.get(`foto:${id}`, true);
     return result ? result.value : null;
   } catch (e) {
     return null;
@@ -369,7 +372,7 @@ async function loadPhotoBlob(id) {
 
 async function deletePhotoBlob(id) {
   try {
-    await storage.delete(`foto:${id}`);
+    await window.storage.delete(`foto:${id}`, true);
   } catch (e) {
     /* ignore */
   }
@@ -432,104 +435,7 @@ function compressImage(file, maxDim = 1280, quality = 0.72) {
 // chama usa "Imprimir" como alternativa — isso evita qualquer risco de
 // travar o app tentando carregar uma biblioteca que não existe aqui.
 async function gerarPdfProposta(proposta, cliente, total) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  let y = margin;
-
-  try {
-    doc.addImage(LOGO_PNG_DATA_URI(), "PNG", margin, y, 40, 40);
-  } catch (e) {}
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 50, y + 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  const linhaCnpjEndereco = [PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || "Rua Des. José Mauro Bourroul Ribeiro, 205 - Cibratel, Itanhaém - SP, 11740-000"].filter(Boolean).join(" - ");
-  doc.text(linhaCnpjEndereco, margin + 50, y + 30);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text(`PROPOSTA Nº ${proposta.pedido || "-"}`, 555, y + 16, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.text(`${proposta.tipo || "-"} - ${new Date(proposta.criadaEm).toLocaleDateString("pt-BR")}`, 555, y + 30, { align: "right" });
-
-  y += 55;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 22;
-
-  doc.setFontSize(10);
-  doc.setFont("helvetica", "bold");
-  doc.text("Cliente:", margin, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(cliente ? cliente.nome : "-", margin + 45, y);
-
-  doc.setFont("helvetica", "bold");
-  doc.text("Contato:", 300, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(cliente?.telefone || "-", 345, y);
-  y += 16;
-
-  doc.setFont("helvetica", "bold");
-  doc.text("CPF/CNPJ:", margin, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(cliente?.cpf || "-", margin + 60, y);
-
-  doc.setFont("helvetica", "bold");
-  doc.text("Endereço:", 300, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(doc.splitTextToSize(enderecoCompleto(cliente) || "-", 200), 350, y);
-  y += 30;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9.5);
-  doc.text("Descrição", margin, y);
-  doc.text("Qtd", 350, y, { align: "right" });
-  doc.text("Valor unit.", 460, y, { align: "right" });
-  doc.text("Subtotal", 555, y, { align: "right" });
-  y += 6;
-  doc.line(margin, y, 555, y);
-  y += 14;
-
-  doc.setFont("helvetica", "normal");
-  proposta.itens.forEach((it) => {
-    const subtotal = (Number(it.qtd) || 0) * (Number(it.valorUnit) || 0);
-    doc.text(it.descricao || "-", margin, y);
-    doc.text(String(it.qtd || 0), 350, y, { align: "right" });
-    doc.text(money(it.valorUnit), 460, y, { align: "right" });
-    doc.text(money(subtotal), 555, y, { align: "right" });
-    y += 16;
-  });
-
-  y += 10;
-  doc.line(margin, y, 555, y);
-  y += 20;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text(`Total: ${money(total)}`, 555, y, { align: "right" });
-
-  if (proposta.observacao) {
-    y += 26;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text(doc.splitTextToSize(proposta.observacao, 515), margin, y);
-    y += doc.splitTextToSize(proposta.observacao, 515).length * 11;
-  }
-
-  doc.addPage();
-  let y2 = margin;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("OBSERVAÇÕES", margin, y2);
-  y2 += 18;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  const linhas = doc.splitTextToSize(proposta.descritivo !== undefined ? proposta.descritivo : DESCRITIVO_ESCAVADEIRA, 515);
-  doc.text(linhas, margin, y2);
-
-  return doc.output("blob");
+  return null;
 }
 
 // Versão segura do PDF do tick (mesma lógica: no site publicado essa função
@@ -537,455 +443,31 @@ async function gerarPdfProposta(proposta, cliente, total) {
 
 // Versão segura do PDF do recibo (mesma lógica: real só no site publicado).
 async function gerarPdfRecibo(conta, cliente, numeroRecibo) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  let y = margin;
-
-  try {
-    doc.addImage(LOGO_PNG_DATA_URI(), "PNG", margin, y, 40, 40);
-  } catch (e) {}
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 50, y + 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  const linhaCnpjEndereco = [PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || "Rua Des. José Mauro Bourroul Ribeiro, 205 - Cibratel, Itanhaém - SP, 11740-000"].filter(Boolean).join(" - ");
-  doc.text(linhaCnpjEndereco, margin + 50, y + 30);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text(`RECIBO Nº ${numeroRecibo}`, 555, y + 16, { align: "right" });
-  if (conta.pedido) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.text(`Pedido nº ${conta.pedido}`, 555, y + 30, { align: "right" });
-  }
-
-  y += 55;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 30;
-
-  const nomeCliente = cliente?.nome || "-";
-  const dataPagamento = conta.dataPagamento || conta.vencimento;
-
-  // Quando o recibo junta vários dias de produção (producaoDetalhe), o
-  // valor certo a mostrar é a SOMA de tudo — não o valor de um lançamento
-  // só. E o texto ganha o período (datas) trabalhado.
-  const producaoDetalhe = conta.producaoDetalhe || [];
-  const valorTotal = producaoDetalhe.length > 0 ? producaoDetalhe.reduce((s, r) => s + numeroSeguro(r.total), 0) : numeroSeguro(conta.valor);
-  const datasOrdenadas = [...new Set(producaoDetalhe.map((r) => r.data).filter(Boolean))].sort((a, b) => dataOrdenavel(a).localeCompare(dataOrdenavel(b)));
-  const periodoTexto =
-    datasOrdenadas.length === 0
-      ? ""
-      : datasOrdenadas.length === 1
-      ? `, do dia ${fmtDate(datasOrdenadas[0])}`
-      : `, do dia ${fmtDate(datasOrdenadas[0])} ao dia ${fmtDate(datasOrdenadas[datasOrdenadas.length - 1])}`;
-  const equipamentosTexto = [...new Set(producaoDetalhe.map((r) => r.equipamento).filter(Boolean))].join(", ");
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(11);
-  const texto =
-    `Recebemos de ${nomeCliente}${cliente?.cpf ? ` (CPF/CNPJ ${cliente.cpf})` : ""}, a quantia de ${money(valorTotal)}, ` +
-    `referente a ${conta.descricao || "serviço prestado"}${equipamentosTexto ? ` (${equipamentosTexto})` : ""}` +
-    `${conta.pedido ? `, pedido nº ${conta.pedido}` : ""}${periodoTexto}, ` +
-    `pago em ${fmtDate(dataPagamento)}${conta.formaPagamento ? ` via ${conta.formaPagamento}` : ""}.`;
-  const linhas = doc.splitTextToSize(texto, 515);
-  doc.text(linhas, margin, y);
-  y += linhas.length * 16 + 20;
-
-  // Detalhamento do serviço, puxado da Produção lançada nesse pedido —
-  // cada item (diária, frete, viagens) vira uma linha numerada própria.
-  const itensRecibo = [];
-  producaoDetalhe.forEach((r) => {
-    if (numeroSeguro(r.valorDiaria) > 0) itensRecibo.push({ label: `${r.tipoEquip || "Diária"} - ${fmtDate(r.data)}`, valor: numeroSeguro(r.valorDiaria) });
-    if (numeroSeguro(r.frete) > 0) itensRecibo.push({ label: `Frete - ${fmtDate(r.data)}`, valor: numeroSeguro(r.frete) });
-    const viagensTotal = (r.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
-    if (viagensTotal > 0) itensRecibo.push({ label: `Viagens - ${fmtDate(r.data)}`, valor: viagensTotal });
-  });
-
-  if (itensRecibo.length > 0) {
-    doc.setDrawColor(200);
-    doc.rect(margin, y, 515, 14, "S");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.5);
-    doc.text("DETALHAMENTO DO SERVIÇO", margin + 8, y + 10);
-    y += 26;
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-    let totalItens = 0;
-    itensRecibo.forEach((item, i) => {
-      if (y > 770) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.text(`${i + 1}. ${item.label}`, margin + 4, y);
-      doc.text(money(item.valor), 555, y, { align: "right" });
-      totalItens += item.valor;
-      y += 17;
-    });
-
-    y += 4;
-    doc.setDrawColor(180);
-    doc.line(margin, y, 555, y);
-    y += 16;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.text("Total", margin + 4, y);
-    doc.text(money(totalItens), 555, y, { align: "right" });
-    y += 20;
-  }
-
-  doc.setFontSize(10);
-  doc.setTextColor(90);
-  doc.text("Para maior clareza e por ser verdade, firmamos o presente recibo.", margin, y);
-  doc.setTextColor(0);
-
-  y += 90;
-  doc.setDrawColor(150);
-  doc.line(margin + 130, y, margin + 390, y);
-  doc.setFontSize(9);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 260, y + 14, { align: "center" });
-
-  return doc.output("blob");
+  return null;
 }
 
 // Versão segura do PDF da ordem de serviço (mesma lógica: real só no site publicado).
 
 // Versão segura do PDF de relatório geral por pedido (mesma lógica: real só no site publicado).
 async function gerarPdfRelatorioGeral(pedido, cliente, lancamentosEsc, propostasPedido, contasPedido, totalGeral) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  let y = margin;
-
-  try {
-    doc.addImage(LOGO_PNG_DATA_URI(), "PNG", margin, y, 40, 40);
-  } catch (e) {}
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 50, y + 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  const linhaCnpjEndereco = [PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || "Rua Des. José Mauro Bourroul Ribeiro, 205 - Cibratel, Itanhaém - SP, 11740-000"].filter(Boolean).join(" - ");
-  doc.text(linhaCnpjEndereco, margin + 50, y + 30);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text("RELATÓRIO GERAL", 555, y + 16, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.text(`Pedido nº ${pedido}`, 555, y + 30, { align: "right" });
-
-  y += 55;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 22;
-
-  if (cliente) {
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Cliente: ${cliente.nome}  ·  Telefone: ${cliente.telefone || "-"}  ·  Endereço: ${cliente.endereco || "-"}`, margin, y);
-    y += 22;
-  }
-
-  const secao = (titulo, itens, montarLinha, valorSubtotal, montarDetalhe) => {
-    if (!itens || itens.length === 0) return;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.text(titulo, margin, y);
-    y += 16;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9.5);
-    itens.forEach((it) => {
-      const [label, valor] = montarLinha(it);
-      doc.text(label, margin, y);
-      doc.text(valor, 555, y, { align: "right" });
-      y += 13;
-      if (montarDetalhe) {
-        doc.setFontSize(8);
-        doc.setTextColor(110);
-        const detalhe = montarDetalhe(it);
-        const linhasDetalhe = doc.splitTextToSize(detalhe, 515);
-        doc.text(linhasDetalhe, margin + 6, y);
-        y += linhasDetalhe.length * 10 + 4;
-        doc.setFontSize(9.5);
-        doc.setTextColor(0);
-      }
-    });
-    if (valorSubtotal !== undefined) {
-      doc.setFont("helvetica", "bold");
-      doc.text("Subtotal", margin, y);
-      doc.text(money(valorSubtotal), 555, y, { align: "right" });
-      y += 15;
-    }
-    y += 10;
-  };
-
-  const totalEsc = (lancamentosEsc || []).reduce((s, r) => s + numeroSeguro(r.total), 0);
-
-  secao(
-    `Produção (${(lancamentosEsc || []).length})`,
-    lancamentosEsc,
-    (r) => [`${fmtDate(r.data)} — ${r.equipamento || "-"}`, money(r.total)],
-    totalEsc,
-    (r) => {
-      const viagensTotal = (r.viagens || []).reduce((s, v) => s + (Number(v.valor) || 0), 0);
-      return `Diária: ${money(r.valorDiaria)} · Frete: ${money(r.frete)} · Retirada de material: ${r.retiradaMaterial ? `Sim - ${r.retiradaMaterial}` : "Não"}${(r.viagens || []).length > 0 ? ` · Viagens: ${r.viagens.length} (${money(viagensTotal)})` : ""}`;
-    }
-  );
-  secao(
-    `Propostas (${(propostasPedido || []).length})`,
-    propostasPedido,
-    (p) => [`${p.tipo} — ${new Date(p.criadaEm).toLocaleDateString("pt-BR")}`, money(p.itens.reduce((s, it) => s + (Number(it.qtd) || 0) * (Number(it.valorUnit) || 0), 0))]
-  );
-  secao(
-    `Financeiro (${(contasPedido || []).length})`,
-    contasPedido,
-    (c) => [`${c.tipo} — ${c.descricao || "-"} (${c.status})`, money(c.valor)]
-  );
-
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 20;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text(`Total geral: ${money(totalGeral)}`, 555, y, { align: "right" });
-
-  return doc.output("blob");
+  return null;
 }
 
 // Versão segura do PDF de relatório de inadimplência por cliente (mesma lógica: real só no site publicado).
 async function gerarPdfInadimplenciaCliente(cliente, itens, totalAberto) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  let y = margin;
-
-  try {
-    doc.addImage(LOGO_PNG_DATA_URI(), "PNG", margin, y, 40, 40);
-  } catch (e) {}
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 50, y + 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  const linhaCnpjEndereco = [PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || "Rua Des. José Mauro Bourroul Ribeiro, 205 - Cibratel, Itanhaém - SP, 11740-000"].filter(Boolean).join(" - ");
-  doc.text(linhaCnpjEndereco, margin + 50, y + 30);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text("RELATÓRIO DE PENDÊNCIAS", 555, y + 16, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.text(cliente?.nome || "-", 555, y + 30, { align: "right" });
-
-  y += 55;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 22;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text(`${itens.length} lançamento(s) em aberto`, margin, y);
-  doc.text(`Total: ${money(totalAberto)}`, 555, y, { align: "right" });
-  y += 22;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9.5);
-  doc.text("Pedido / data", margin, y);
-  doc.text("Situação", 555, y, { align: "right" });
-  y += 6;
-  doc.line(margin, y, 555, y);
-  y += 14;
-
-  doc.setFont("helvetica", "normal");
-  [...itens]
-    .sort((a, b) => String(a.data || "").localeCompare(String(b.data || "")))
-    .forEach((it) => {
-      if (y > 760) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.setFont("helvetica", "bold");
-      doc.text(`Pedido #${it.pedido || "-"}`, margin, y);
-      doc.text(money(it.valor), 555, y, { align: "right" });
-      y += 13;
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8.5);
-      doc.setTextColor(90);
-      doc.text(`${fmtDate(it.data)} · ${it.origem || "-"} · ${it.descricao || "-"} · ${it.atrasado ? "ATRASADO" : "A vencer"}`, margin, y);
-      doc.setTextColor(0);
-      doc.setFontSize(9.5);
-      y += 16;
-    });
-
-  y += 8;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 20;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text(`Total em aberto: ${money(totalAberto)}`, 555, y, { align: "right" });
-
-  return doc.output("blob");
+  return null;
 }
 
 // Versão segura do PDF de relatório de estacas por pedido (mesma lógica: real só no site publicado).
 
 // Versão segura do PDF da folha de pagamento (mesma lógica: real só no site publicado).
 async function gerarPdfFolhaPagamento(mes, itens) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  let y = margin;
-
-  const nomeMes = new Date(`${mes}-01T00:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
-
-  try {
-    doc.addImage(LOGO_PNG_DATA_URI(), "PNG", margin, y, 40, 40);
-  } catch (e) {}
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 50, y + 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  const linhaCnpjEndereco = [PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || "Rua Des. José Mauro Bourroul Ribeiro, 205 - Cibratel, Itanhaém - SP, 11740-000"].filter(Boolean).join(" - ");
-  doc.text(linhaCnpjEndereco, margin + 50, y + 30);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text("FOLHA DE PAGAMENTO", 555, y + 16, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.text(nomeMes, 555, y + 30, { align: "right" });
-
-  y += 55;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 22;
-
-  const totalGeral = itens.reduce((s, f) => s + valorLiquidoFolha(f), 0);
-  const totalPago = itens.filter((f) => f.status === "Pago").reduce((s, f) => s + valorLiquidoFolha(f), 0);
-  const totalPendente = totalGeral - totalPago;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text(`Total da folha: ${money(totalGeral)}   ·   Já pago: ${money(totalPago)}   ·   Pendente: ${money(totalPendente)}`, margin, y);
-  y += 24;
-
-  const porFuncionario = new Map();
-  itens.forEach((f) => {
-    if (!porFuncionario.has(f.funcionario)) porFuncionario.set(f.funcionario, []);
-    porFuncionario.get(f.funcionario).push(f);
-  });
-  const nomes = [...porFuncionario.keys()].sort();
-
-  nomes.forEach((nome) => {
-    if (y > 740) {
-      doc.addPage();
-      y = margin;
-    }
-    const lancamentos = porFuncionario.get(nome);
-    const totalFuncionario = lancamentos.reduce((s, f) => s + valorLiquidoFolha(f), 0);
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10.5);
-    doc.text(nome, margin, y);
-    doc.text(money(totalFuncionario), 555, y, { align: "right" });
-    y += 14;
-
-    lancamentos.forEach((f) => {
-      if (y > 770) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.text(`${f.tipoPagamento} — vencimento ${fmtDate(f.vencimento)} (${f.status})`, margin + 8, y);
-      doc.text(money(valorLiquidoFolha(f)), 555, y, { align: "right" });
-      y += 11;
-
-      doc.setFontSize(7.5);
-      doc.setTextColor(110);
-      let detalhe = `Salário: ${money(f.salarioBase)} · Vale transp.: ${money(f.valeTransporte)} · Vale alim.: ${money(f.valeAlimentacao)} · Ajuda de custo: ${money(f.ajudaCusto)}`;
-      if (numeroSeguro(f.premiacao) > 0) detalhe += ` · Premiação: +${money(f.premiacao)}`;
-      if (numeroSeguro(f.desconto) > 0) detalhe += ` · Desconto: -${money(f.desconto)}`;
-      const linhasDetalhe = doc.splitTextToSize(detalhe, 505);
-      doc.text(linhasDetalhe, margin + 8, y);
-      y += linhasDetalhe.length * 9 + 6;
-      doc.setFontSize(9);
-      doc.setTextColor(0);
-    });
-    y += 6;
-  });
-
-  return doc.output("blob");
+  return null;
 }
 
 // Versão segura do PDF de relatório de produção por status (mesma lógica: real só no site publicado).
 async function gerarPdfRelatorioProducaoFinanceiro(titulo, porStatus, totalGeral) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const margin = 40;
-  let y = margin;
-
-  try {
-    doc.addImage(LOGO_PNG_DATA_URI(), "PNG", margin, y, 40, 40);
-  } catch (e) {}
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto", margin + 50, y + 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  const linhaCnpjEndereco = [PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || "Rua Des. José Mauro Bourroul Ribeiro, 205 - Cibratel, Itanhaém - SP, 11740-000"].filter(Boolean).join(" - ");
-  doc.text(linhaCnpjEndereco, margin + 50, y + 30);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text("RELATÓRIO", 555, y + 16, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.text(titulo, 555, y + 30, { align: "right" });
-
-  y += 55;
-  doc.setDrawColor(20);
-  doc.line(margin, y, 555, y);
-  y += 22;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text(`Total geral: ${money(totalGeral)}`, margin, y);
-  y += 22;
-
-  porStatus.forEach((g) => {
-    if (y > 750) {
-      doc.addPage();
-      y = margin;
-    }
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.text(`${g.status} (${g.itens.length})`, margin, y);
-    doc.text(money(g.total), 555, y, { align: "right" });
-    y += 16;
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9.5);
-    g.itens.forEach((r) => {
-      if (y > 780) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.text(`${r.cliente || "-"} — ${fmtDate(r.data)} (${r.equipamento || "-"})`, margin, y);
-      doc.text(money(r.total), 555, y, { align: "right" });
-      y += 14;
-    });
-    y += 10;
-  });
-
-  return doc.output("blob");
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1824,6 +1306,8 @@ const NAV_ITEMS = [
   { id: "financeiro", label: "Financeiro", icon: Wallet },
   { id: "calculadora", label: "Cubicagem de Concretagem", icon: Calculator },
   { id: "compraMaterial", label: "Compra de Material", icon: ShoppingCart },
+  { id: "cartaTraco", label: "Carta Traço", icon: Beaker },
+  { id: "diesel", label: "Diesel", icon: Fuel },
   { id: "estoque", label: "Estoque de Materiais", icon: Boxes },
   { id: "despesas", label: "Despesas Fixas", icon: Home },
   { id: "folhaPagamento", label: "Folha de Pagamento", icon: UserCheck },
@@ -1888,6 +1372,8 @@ export default function App() {
   const [comprasMaterial, setComprasMaterial] = useState([]);
   const [movimentosEstoque, setMovimentosEstoque] = useState([]);
   const [bombaConcreto, setBombaConcreto] = useState([]);
+  const [cartaTraco, setCartaTraco] = useState([]);
+  const [registrosDiesel, setRegistrosDiesel] = useState([]);
   const [mensagens, setMensagens] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [logAcessos, setLogAcessos] = useState([]);
@@ -1958,7 +1444,7 @@ export default function App() {
     (async () => {
      try {
       console.log("[TopLocacoes] App: iniciando carregamento de todas as coleções...");
-      let [c, pe, pr, mq, mn, ag, cd, fn, op, vd, us, lg, sc, dsp, flh, func, mtr, cam, empR, galDiv, msgs, cub, comprMat, movEst, bombaC] = await Promise.all([
+      let [c, pe, pr, mq, mn, ag, cd, fn, op, vd, us, lg, sc, dsp, flh, func, mtr, cam, empR, galDiv, msgs, cub, comprMat, movEst, bombaC, cTraco, rDiesel] = await Promise.all([
         loadCollection(STORAGE_KEYS.clientes),
         loadCollection(STORAGE_KEYS.producaoEsc),
         loadCollection(STORAGE_KEYS.propostas),
@@ -1984,24 +1470,26 @@ export default function App() {
         loadCollection(STORAGE_KEYS.comprasMaterial),
         loadCollection(STORAGE_KEYS.movimentosEstoque),
         loadCollection(STORAGE_KEYS.bombaConcreto),
+        loadCollection(STORAGE_KEYS.cartaTraco),
+        loadCollection(STORAGE_KEYS.registrosDiesel),
       ]);
 
       try {
-        const sec = await storage.get(STORAGE_KEYS.security);
+        const sec = await window.storage.get(STORAGE_KEYS.security, true);
         setSecurity(sec ? JSON.parse(sec.value) : { passwordHash: "" });
       } catch (e) {
         setSecurity({ passwordHash: "" });
       }
 
       try {
-        const appSec = await storage.get(STORAGE_KEYS.appAccess);
+        const appSec = await window.storage.get(STORAGE_KEYS.appAccess, true);
         setAppSecurity(appSec ? JSON.parse(appSec.value) : { passwordHash: "" });
       } catch (e) {
         setAppSecurity({ passwordHash: "" });
       }
 
       try {
-        const pr = await storage.get(STORAGE_KEYS.prefs);
+        const pr = await window.storage.get(STORAGE_KEYS.prefs, true);
         if (pr) setPrefs(JSON.parse(pr.value));
       } catch (e) {
         /* mantém padrão */
@@ -2047,6 +1535,8 @@ export default function App() {
       setComprasMaterial(comprMat);
       setMovimentosEstoque(movEst);
       setBombaConcreto(bombaC);
+      setCartaTraco(cTraco);
+      setRegistrosDiesel(rDiesel);
 
       lastSyncedRef.current = {
         [STORAGE_KEYS.clientes]: JSON.stringify(c),
@@ -2073,6 +1563,8 @@ export default function App() {
         [STORAGE_KEYS.comprasMaterial]: JSON.stringify(comprMat),
         [STORAGE_KEYS.movimentosEstoque]: JSON.stringify(movEst),
         [STORAGE_KEYS.bombaConcreto]: JSON.stringify(bombaC),
+        [STORAGE_KEYS.cartaTraco]: JSON.stringify(cTraco),
+        [STORAGE_KEYS.registrosDiesel]: JSON.stringify(rDiesel),
       };
 
       console.log("[TopLocacoes] App: todas as coleções carregadas com sucesso!");
@@ -2484,7 +1976,7 @@ export default function App() {
               prefs={prefs}
               onPrefsChanged={async (next) => {
                 setPrefs(next);
-                await storage.set(STORAGE_KEYS.prefs, JSON.stringify(next));
+                await window.storage.set(STORAGE_KEYS.prefs, JSON.stringify(next), true);
               }}
               galeria={galeriaDivulgacao}
               onChangeGaleria={(next) => persist(STORAGE_KEYS.galeriaDivulgacao, setGaleriaDivulgacao, next)}
@@ -2511,7 +2003,7 @@ export default function App() {
               ticks={ticks}
               onChange={(next) => persist(STORAGE_KEYS.producaoEsc, setProducaoEsc, next)}
               onGerarProposta={(record) => {
-                setPropostaDraft({ pedido: record.pedido, tipo: "Escavadeira" });
+                setPropostaDraft({ pedido: record.pedido, tipo: "Concreto" });
                 setTab("propostas");
               }}
             />
@@ -2585,6 +2077,18 @@ export default function App() {
               onChangeMovimentos={(next) => persist(STORAGE_KEYS.movimentosEstoque, setMovimentosEstoque, next)}
             />
           )}
+          {tab === "cartaTraco" && (
+            <CartaTracoModule
+              cartaTraco={cartaTraco}
+              onChange={(next) => persist(STORAGE_KEYS.cartaTraco, setCartaTraco, next)}
+            />
+          )}
+          {tab === "diesel" && (
+            <DieselModule
+              registros={registrosDiesel}
+              onChange={(next) => persist(STORAGE_KEYS.registrosDiesel, setRegistrosDiesel, next)}
+            />
+          )}
           {tab === "estoque" && (
             <EstoqueModule
               movimentos={movimentosEstoque}
@@ -2603,6 +2107,11 @@ export default function App() {
               producaoEsc={producaoEsc}
               clienteByPedido={clienteByPedido}
               onChangeProducaoEsc={(next) => persist(STORAGE_KEYS.producaoEsc, setProducaoEsc, next)}
+              cartaTraco={cartaTraco}
+              movimentosEstoque={movimentosEstoque}
+              onChangeMovimentosEstoque={(next) => persist(STORAGE_KEYS.movimentosEstoque, setMovimentosEstoque, next)}
+              financeiro={financeiro}
+              onChangeFinanceiro={(next) => persist(STORAGE_KEYS.financeiro, setFinanceiro, next)}
             />
           )}
           {tab === "despesas" && (
@@ -2641,18 +2150,18 @@ export default function App() {
             <ConfiguracoesModule
               onPasswordChanged={async (newHash) => {
                 const newSecurity = { passwordHash: newHash };
-                await storage.set(STORAGE_KEYS.security, JSON.stringify(newSecurity));
+                await window.storage.set(STORAGE_KEYS.security, JSON.stringify(newSecurity), true);
                 setSecurity(newSecurity);
               }}
               onAppPasswordChanged={async (newHash) => {
                 const newAppSecurity = { passwordHash: newHash };
-                await storage.set(STORAGE_KEYS.appAccess, JSON.stringify(newAppSecurity));
+                await window.storage.set(STORAGE_KEYS.appAccess, JSON.stringify(newAppSecurity), true);
                 setAppSecurity(newAppSecurity);
               }}
               prefs={prefs}
               onPrefsChanged={async (next) => {
                 setPrefs(next);
-                await storage.set(STORAGE_KEYS.prefs, JSON.stringify(next));
+                await window.storage.set(STORAGE_KEYS.prefs, JSON.stringify(next), true);
               }}
               maquinas={maquinas}
               onChangeMaquinas={(next) => persist(STORAGE_KEYS.maquinas, setMaquinas, next)}
@@ -2703,7 +2212,7 @@ export default function App() {
             if (!security?.passwordHash) {
               const hash = await hashPassword(pw);
               const newSecurity = { passwordHash: hash };
-              await storage.set(STORAGE_KEYS.security, JSON.stringify(newSecurity));
+              await window.storage.set(STORAGE_KEYS.security, JSON.stringify(newSecurity), true);
               setSecurity(newSecurity);
               grant();
               return true;
@@ -2718,7 +2227,7 @@ export default function App() {
           onReset={async (pw) => {
             const hash = await hashPassword(pw);
             const newSecurity = { passwordHash: hash };
-            await storage.set(STORAGE_KEYS.security, JSON.stringify(newSecurity));
+            await window.storage.set(STORAGE_KEYS.security, JSON.stringify(newSecurity), true);
             setSecurity(newSecurity);
             setUnlocked(true);
             if (pendingTab) { setTab(pendingTab); setPendingTab(null); }
@@ -4229,7 +3738,7 @@ const emptyProducao = () => ({
   valorPago: "", // se for menor que o total, é pagamento parcial
   dataProximoPagamento: "", // obrigatório se o pagamento ficou parcial
 });
-const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", lacre: "", valorBomba: "", descricao: "", valor: "" });
+const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", sobra: "", lacre: "", valorBomba: "", descricao: "", valor: "" });
 
 function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords, clienteByPedido, operadores, vendedores, motoristas, caminhoes, empresasRetirada, propostas, todasProducaoEsc, todasProducaoPerf, financeiro, ticks, onChange, onGerarProposta }) {
   const [editing, setEditing] = useState(null);
@@ -4814,12 +4323,16 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const viagens = form.viagens || [];
   const total = recalcularComCargas(form).total;
   const ehPago = form.status === "PAGO";
-  // Se o campo "valor pago" ainda não foi digitado, assume o total ATUAL
-  // (recalculado a cada mudança) — não trava num valor antigo se a pessoa
-  // preencher diária/frete depois de já ter marcado como PAGO.
-  const valorPagoProducao = form.valorPago !== "" ? numeroSeguro(form.valorPago) : total;
+  // O bloco de pagamento aparece tanto pra status PAGO quanto EM ABERTO —
+  // assim dá pra registrar um pagamento PARCIAL sem precisar marcar o
+  // pedido como "pago" (o que seria enganoso enquanto falta receber parte).
+  const mostraBlocoPagamento = form.status === "PAGO" || form.status === "EM ABERTO";
+  // Se o campo "valor pago" ainda não foi digitado: quando o status é PAGO,
+  // assume o total inteiro; quando é EM ABERTO, assume que nada foi pago
+  // ainda (0), a não ser que a pessoa preencha um valor parcial.
+  const valorPagoProducao = form.valorPago !== "" ? numeroSeguro(form.valorPago) : (ehPago ? total : 0);
   const restanteProducao = Math.max(0, total - valorPagoProducao);
-  const pagamentoParcialProducao = ehPago && restanteProducao > 0.005;
+  const pagamentoParcialProducao = mostraBlocoPagamento && restanteProducao > 0.005 && valorPagoProducao > 0.005;
 
   // O pedido usado pra buscar cargas só atualiza 300ms depois que a pessoa
   // parar de digitar — sem isso, com muitos ticks acumulados no sistema, a
@@ -5005,14 +4518,14 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
           </Field>
         </div>
 
-        {ehPago && (
+        {mostraBlocoPagamento && (
           <div style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "8px", padding: "14px 16px", marginBottom: "16px" }}>
-            <Field label={"Forma de pagamento *"} hint="Obrigatório quando o status é PAGO">
-              <Input value={form.formaPagamento} onChange={set("formaPagamento")} placeholder="Ex: PIX, boleto, dinheiro" required />
+            <Field label={ehPago ? "Forma de pagamento *" : "Forma de pagamento"} hint={ehPago ? "Obrigatório quando o status é PAGO" : "Preenche se já recebeu algum valor adiantado"}>
+              <Input value={form.formaPagamento} onChange={set("formaPagamento")} placeholder="Ex: PIX, boleto, dinheiro" required={ehPago} />
             </Field>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-              <Field label="Valor pago (R$)" hint="Deixa em branco se pagou o total inteiro">
-                <Input type="number" min="0" step="0.01" value={form.valorPago} onChange={set("valorPago")} placeholder={money(total)} />
+              <Field label="Valor pago (R$)" hint={ehPago ? "Deixa em branco se pagou o total inteiro" : "Deixa em branco se ainda não recebeu nada"}>
+                <Input type="number" min="0" step="0.01" value={form.valorPago} onChange={set("valorPago")} placeholder={ehPago ? money(total) : "0,00"} />
               </Field>
               <Field label="Falta pagar (calculado sozinho)">
                 <div style={{ padding: "9px 12px", background: "var(--bg-panel-raised)", borderRadius: "6px", fontSize: "14px", fontWeight: 700, color: restanteProducao > 0.005 ? "var(--danger)" : "var(--success)" }} className="tl-mono">
@@ -5139,7 +4652,54 @@ function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
 // endereço e a especificação do concreto sozinho, e o operador só lança
 // cada carga que sai (horário, placa, motorista, volume, valor, lacre,
 // bomba). As cargas ficam salvas dentro do mesmo lançamento de Produção.
-function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEsc }) {
+// Box de fechamento do pedido — se ainda tem saldo em aberto, oferece um
+// link pronto de cobrança pelo WhatsApp; sempre oferece dar baixa (marca o
+// lançamento como CONCLUÍDO em Produção-Concreto).
+function FinalizarPedidoBox({ lancamento, cliente, producaoEsc, onChangeProducaoEsc }) {
+  const total = numeroSeguro(lancamento.total);
+  const valorPago = lancamento.valorPago !== "" && lancamento.valorPago !== undefined ? numeroSeguro(lancamento.valorPago) : (lancamento.status === "PAGO" ? total : 0);
+  const saldoAberto = Math.max(0, total - valorPago);
+  const jaFinalizado = lancamento.status === "CONCLUÍDO";
+
+  const finalizar = () => {
+    onChangeProducaoEsc(producaoEsc.map((r) => (r.id === lancamento.id ? { ...r, status: "CONCLUÍDO" } : r)));
+  };
+
+  const linkCobranca = () => {
+    const telefone = (cliente?.telefone || "").replace(/\D/g, "");
+    const msg = `Olá! Sobre o pedido nº ${lancamento.pedido}, ainda está em aberto o valor de ${money(saldoAberto)}. Pode nos ajudar com a regularização? Qualquer dúvida, estamos à disposição!`;
+    const url = telefone ? `https://wa.me/55${telefone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    window.open(url, "_blank");
+  };
+
+  if (jaFinalizado) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--bg-panel)", border: "1px solid var(--border-soft)", borderRadius: "9px", padding: "12px 16px", marginBottom: "18px", fontSize: "12.5px", color: "var(--success)" }}>
+        <CheckCircle2 size={16} /> Esse pedido já está marcado como concluído.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", background: "var(--bg-panel)", border: "1px solid var(--border-soft)", borderRadius: "9px", padding: "12px 16px", marginBottom: "18px" }}>
+      <div style={{ fontSize: "12.5px" }}>
+        {saldoAberto > 0.005 ? (
+          <span>Saldo em aberto: <strong style={{ color: "var(--danger)" }}>{money(saldoAberto)}</strong></span>
+        ) : (
+          <span style={{ color: "var(--success)" }}>Sem saldo em aberto — pode dar baixa.</span>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: "8px" }}>
+        {saldoAberto > 0.005 && (
+          <Button type="button" size="sm" variant="subtle" icon={MessageCircle} onClick={linkCobranca}>Enviar cobrança</Button>
+        )}
+        <Button type="button" size="sm" icon={CheckCircle2} onClick={finalizar}>Finalizar pedido</Button>
+      </div>
+    </div>
+  );
+}
+
+function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEsc, cartaTraco, movimentosEstoque, onChangeMovimentosEstoque, financeiro, onChangeFinanceiro }) {
   const [pedidoBusca, setPedidoBusca] = useState("");
   const [cargaAberta, setCargaAberta] = useState(null);
   const [imprimindoCarga, setImprimindoCarga] = useState(null);
@@ -5155,11 +4715,44 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
   const lancamento = pedido ? producaoEsc.find((r) => String(r.pedido).trim() === pedido) : null;
   const cliente = pedido ? clienteByPedido.get(pedido) : null;
   const viagens = lancamento?.viagens || [];
+  const temTraco = lancamento ? cartaTraco.some((t) => (t.fck || "").trim().toLowerCase() === (lancamento.fck || "").trim().toLowerCase()) : false;
+
+  // Recalcula os movimentos de estoque de TODAS as cargas desse lançamento
+  // — sempre remove os antigos (pelo id da carga que os gerou) e recria do
+  // zero com os valores atuais, pra nunca duplicar ao editar uma carga.
+  const recalcularEstoqueDasCargas = (novasViagens) => {
+    if (!lancamento) return movimentosEstoque;
+    const idsDasCargas = new Set(novasViagens.map((v) => v.id));
+    const semAntigos = movimentosEstoque.filter((m) => !(m.origemCargaId && idsDasCargas.has(m.origemCargaId)));
+    const novosMovimentos = [];
+    novasViagens.forEach((v) => {
+      const volumeBruto = Number(v.volume) || 0;
+      const sobra = Number(v.sobra) || 0;
+      const volumeEfetivo = Math.max(0, volumeBruto - sobra);
+      if (volumeEfetivo <= 0) return;
+      const consumo = calcularConsumoMateriais(cartaTraco, lancamento.fck, volumeEfetivo);
+      if (!consumo) return;
+      Object.entries(consumo).forEach(([material, quantidade]) => {
+        if (quantidade <= 0) return;
+        novosMovimentos.push({
+          id: uid(),
+          origemCargaId: v.id,
+          data: lancamento.data || hoje,
+          material,
+          tipo: "Saída",
+          quantidade: Number(quantidade.toFixed(3)),
+          motivo: `Consumo automático — Pedido ${lancamento.pedido}, carta traço ${lancamento.fck}`,
+        });
+      });
+    });
+    return [...semAntigos, ...novosMovimentos];
+  };
 
   const atualizarViagens = (novasViagens) => {
     if (!lancamento) return;
     const atualizado = recalcularComCargas({ ...lancamento, viagens: novasViagens });
     onChangeProducaoEsc(producaoEsc.map((r) => (r.id === lancamento.id ? atualizado : r)));
+    onChangeMovimentosEstoque(recalcularEstoqueDasCargas(novasViagens));
   };
 
   const setViagem = (id, k, v) => atualizarViagens(viagens.map((it) => (it.id === id ? { ...it, [k]: v } : it)));
@@ -5251,6 +4844,8 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
               </div>
             </div>
 
+            <FinalizarPedidoBox lancamento={lancamento} cliente={cliente} producaoEsc={producaoEsc} onChangeProducaoEsc={onChangeProducaoEsc} />
+
             <div style={{ marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="tl-mono" style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" }}>Cargas de entrega (Ordens de Serviço)</span>
               <div style={{ display: "flex", gap: "6px" }}>
@@ -5321,6 +4916,20 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
                               <Input type="number" min="0" step="0.01" value={v.valorBomba} onChange={(e) => setViagem(v.id, "valorBomba", e.target.value)} />
                             </Field>
                           </div>
+                          <Field label="Sobra que voltou (m³)" hint="Se o caminhão voltou com sobra reaproveitável, desconta daqui do consumo de estoque">
+                            <Input type="number" min="0" step="0.1" value={v.sobra} onChange={(e) => setViagem(v.id, "sobra", e.target.value)} />
+                          </Field>
+                          {temTraco ? (
+                            numeroSeguro(v.volume) > 0 && (
+                              <p style={{ fontSize: "10.5px", color: "var(--text-faint)" }}>
+                                Consumo de estoque calculado sozinho pela carta traço, sobre {Math.max(0, numeroSeguro(v.volume) - numeroSeguro(v.sobra)).toFixed(1)} m³ efetivos.
+                              </p>
+                            )
+                          ) : (
+                            <p style={{ fontSize: "10.5px", color: "var(--amber)" }}>
+                              Sem carta traço cadastrada pro FCK "{lancamento.fck || "-"}" — o estoque não vai ser abatido sozinho pra essa carga.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -5366,7 +4975,7 @@ Se precisar de nota fiscal, acrescentar 18% ao valor total.`;
 const emptyProposta = () => ({
   id: uid(),
   pedido: "",
-  tipo: "Escavadeira",
+  tipo: "Concreto",
   itens: [emptyItem()],
   observacao: "",
   enderecoEntrega: "", // local da obra — pode ser diferente do endereço de cobrança do cliente
@@ -5575,8 +5184,8 @@ function PropostaForm({ initial, clienteByPedido, onSave, onClose }) {
           </Field>
           <Field label="Tipo">
             <Select value={form.tipo} onChange={set("tipo")}>
-              <option>Escavadeira</option>
-              <option>Mini Carregadeira</option>
+              <option>Concreto</option>
+              <option>Argamassa</option>
             </Select>
           </Field>
         </div>
@@ -11170,8 +10779,11 @@ function FinanceiroRelatorio({ contas, producaoEsc, producaoPerf, onVerPedido })
           <p style={{ fontSize: "12.5px", color: "var(--text-faint)" }}>Nenhuma conta a receber em aberto — tudo recebido!</p>
         ) : (
           <Table
-            columns={["Pedido", "Descrição / Cliente", "Vencimento", "Status", "Valor"]}
-            rows={abertosReceber.map((c) => (
+            columns={["Pedido", "Descrição / Cliente", "Vencimento", "Status", "Valor pago", "Falta", "Valor"]}
+            rows={abertosReceber.map((c) => {
+              const valorPagoConta = c.valorPago !== "" && c.valorPago !== undefined ? numeroSeguro(c.valorPago) : 0;
+              const faltaConta = Math.max(0, numeroSeguro(c.valor) - valorPagoConta);
+              return (
               <tr key={c.id} style={rowStyle}>
                 <td style={tdStyle}>
                   {c.pedido ? (
@@ -11187,9 +10799,12 @@ function FinanceiroRelatorio({ contas, producaoEsc, producaoPerf, onVerPedido })
                   {fmtDate(c.vencimento)}
                 </td>
                 <td style={tdStyle}><StatusBadge status={c.status} /></td>
+                <td style={{ ...tdStyle, color: valorPagoConta > 0 ? "var(--success)" : "var(--text-faint)" }} className="tl-mono">{valorPagoConta > 0 ? money(valorPagoConta) : "-"}</td>
+                <td style={{ ...tdStyle, color: "var(--danger)", fontWeight: 600 }} className="tl-mono">{money(faltaConta)}</td>
                 <td style={{ ...tdStyle, fontWeight: 600 }} className="tl-mono">{money(numeroSeguro(c.valor))}</td>
               </tr>
-            ))}
+              );
+            })}
           />
         )}
       </div>
@@ -11300,10 +10915,250 @@ const emptyElementoConcreto = () => ({ id: uid(), tipo: "Laje", descricao: "", c
 
 // Materiais agregados usados na usina — compartilhado entre Compra e Estoque.
 const MATERIAIS_AGREGADOS = ["Cimento", "Areia", "Pedra 1", "Pedrisco", "Areia Fina", "Aditivo", "Diesel"];
-const UNIDADE_POR_MATERIAL = { Cimento: "sc", Areia: "m³", "Pedra 1": "m³", Pedrisco: "m³", "Areia Fina": "m³", Aditivo: "L", Diesel: "L" };
+const UNIDADE_POR_MATERIAL = { Cimento: "t", Areia: "t", "Pedra 1": "t", Pedrisco: "t", "Areia Fina": "t", Aditivo: "L", Diesel: "L" };
 // Diesel não entra no controle de estoque (é abastecimento de veículo, não
 // insumo de concreto) — os outros 6 aparecem na tela de Estoque.
 const MATERIAIS_ESTOCADOS = MATERIAIS_AGREGADOS.filter((m) => m !== "Diesel");
+
+// Carta traço — a "receita" de quanto de cada material entra em 1m³ de
+// concreto, por FCK. Cimento/areia/pedra/pedrisco/areia fina em kg por m³
+// (convertidos pra tonelada na hora de abater do estoque); aditivo em
+// litros por m³ (já a unidade usada no estoque).
+const emptyCartaTraco = () => ({
+  id: uid(),
+  fck: "",
+  cimento: "", // kg/m³
+  areia: "", // kg/m³
+  pedra1: "", // kg/m³
+  pedrisco: "", // kg/m³
+  areiaFina: "", // kg/m³
+  aditivo: "", // L/m³
+});
+
+// Calcula quanto de cada material um volume (m³) consome, segundo a carta
+// traço daquele FCK. Retorna null se não existir traço cadastrado pra esse
+// FCK (nesse caso, não há como abater o estoque automaticamente).
+function calcularConsumoMateriais(cartaTraco, fck, volumeM3) {
+  const traco = (cartaTraco || []).find((t) => (t.fck || "").trim().toLowerCase() === (fck || "").trim().toLowerCase());
+  if (!traco || !volumeM3) return null;
+  const kgParaTon = (kgPorM3) => ((Number(kgPorM3) || 0) * volumeM3) / 1000;
+  return {
+    Cimento: kgParaTon(traco.cimento),
+    Areia: kgParaTon(traco.areia),
+    "Pedra 1": kgParaTon(traco.pedra1),
+    Pedrisco: kgParaTon(traco.pedrisco),
+    "Areia Fina": kgParaTon(traco.areiaFina),
+    Aditivo: ((Number(traco.aditivo) || 0) * volumeM3), // já em litros
+  };
+}
+
+function CartaTracoModule({ cartaTraco, onChange }) {
+  const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+
+  const salvar = (item) => {
+    const existe = cartaTraco.some((t) => t.id === item.id);
+    onChange(existe ? cartaTraco.map((t) => (t.id === item.id ? item : t)) : [...cartaTraco, item]);
+    setEditing(null);
+  };
+  const remove = (id) => {
+    onChange(cartaTraco.filter((t) => t.id !== id));
+    setDeleting(null);
+  };
+
+  return (
+    <div className="tl-fade-in">
+      <PageHeader
+        eyebrow="Insumos"
+        title="Carta Traço"
+        action={<Button icon={Plus} onClick={() => setEditing(emptyCartaTraco())}>Novo traço</Button>}
+      />
+      <p style={{ fontSize: "12.5px", color: "var(--text-faint)", marginBottom: "18px", maxWidth: "620px" }}>
+        Cadastra aqui quanto de cada material entra em 1m³ de concreto, por FCK. Assim que uma carga com esse FCK for lançada na Central de Balança com o volume preenchido, o sistema já abate sozinho a quantidade correspondente do Estoque de Materiais.
+      </p>
+      {cartaTraco.length === 0 ? (
+        <EmptyState icon={Beaker} title="Nenhuma carta traço cadastrada ainda" hint="Sem isso, o sistema não consegue abater o estoque sozinho quando uma carga sai." />
+      ) : (
+        <Table
+          columns={["FCK", "Cimento (kg/m³)", "Areia (kg/m³)", "Pedra 1 (kg/m³)", "Pedrisco (kg/m³)", "Areia Fina (kg/m³)", "Aditivo (L/m³)", ""]}
+          rows={cartaTraco.map((t) => (
+            <tr key={t.id} style={rowStyle}>
+              <td style={{ ...tdStyle, fontWeight: 600 }}>{t.fck}</td>
+              <td style={tdStyle} className="tl-mono">{t.cimento || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{t.areia || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{t.pedra1 || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{t.pedrisco || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{t.areiaFina || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{t.aditivo || "-"}</td>
+              <td style={{ ...tdStyle, textAlign: "right" }}>
+                <RowActions onEdit={() => setEditing(t)} onDelete={() => setDeleting(t)} />
+              </td>
+            </tr>
+          ))}
+        />
+      )}
+      {editing && (
+        <Modal title={editing.fck ? "Editar traço" : "Novo traço"} onClose={() => setEditing(null)}>
+          <form onSubmit={(e) => { e.preventDefault(); salvar(editing); }}>
+            <Field label="FCK" hint='Precisa ser igual ao texto usado em Produção (ex: "FCK 25")'>
+              <Input value={editing.fck} onChange={(e) => setEditing({ ...editing, fck: e.target.value })} required />
+            </Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <Field label="Cimento (kg/m³)">
+                <Input type="number" min="0" step="0.1" value={editing.cimento} onChange={(e) => setEditing({ ...editing, cimento: e.target.value })} />
+              </Field>
+              <Field label="Areia (kg/m³)">
+                <Input type="number" min="0" step="0.1" value={editing.areia} onChange={(e) => setEditing({ ...editing, areia: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <Field label="Pedra 1 (kg/m³)">
+                <Input type="number" min="0" step="0.1" value={editing.pedra1} onChange={(e) => setEditing({ ...editing, pedra1: e.target.value })} />
+              </Field>
+              <Field label="Pedrisco (kg/m³)">
+                <Input type="number" min="0" step="0.1" value={editing.pedrisco} onChange={(e) => setEditing({ ...editing, pedrisco: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <Field label="Areia Fina (kg/m³)">
+                <Input type="number" min="0" step="0.1" value={editing.areiaFina} onChange={(e) => setEditing({ ...editing, areiaFina: e.target.value })} />
+              </Field>
+              <Field label="Aditivo (L/m³)">
+                <Input type="number" min="0" step="0.01" value={editing.aditivo} onChange={(e) => setEditing({ ...editing, aditivo: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Button>
+              <Button type="submit">Salvar</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {deleting && (
+        <ConfirmDelete label={`o traço do "${deleting.fck}"`} dados={deleting} onConfirm={() => remove(deleting.id)} onCancel={() => setDeleting(null)} />
+      )}
+    </div>
+  );
+}
+
+const emptyRegistroDiesel = () => ({
+  id: uid(),
+  data: new Date().toISOString().slice(0, 10),
+  placa: "",
+  motorista: "",
+  kmAtual: "",
+  litros: "",
+  valorLitro: "",
+});
+
+// Calcula o consumo (km/L) de cada abastecimento comparando com o anterior
+// da MESMA placa — precisa da lista já ordenada por data crescente.
+function calcularConsumoDiesel(registros) {
+  const porPlaca = {};
+  const ordenados = [...registros].sort((a, b) => dataOrdenavel(a.data).localeCompare(dataOrdenavel(b.data)));
+  return ordenados.map((r) => {
+    const anterior = porPlaca[r.placa];
+    let consumo = null;
+    if (anterior && numeroSeguro(r.kmAtual) > numeroSeguro(anterior.kmAtual) && numeroSeguro(r.litros) > 0) {
+      consumo = (numeroSeguro(r.kmAtual) - numeroSeguro(anterior.kmAtual)) / numeroSeguro(r.litros);
+    }
+    porPlaca[r.placa] = r;
+    return { ...r, consumoKmL: consumo };
+  });
+}
+
+function DieselModule({ registros, onChange }) {
+  const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+
+  const salvar = (item) => {
+    const existe = registros.some((r) => r.id === item.id);
+    onChange(existe ? registros.map((r) => (r.id === item.id ? item : r)) : [...registros, item]);
+    setEditing(null);
+  };
+  const remove = (id) => {
+    onChange(registros.filter((r) => r.id !== id));
+    setDeleting(null);
+  };
+
+  const comConsumo = useMemo(() => calcularConsumoDiesel(registros), [registros]);
+  const porData = [...comConsumo].sort((a, b) => dataOrdenavel(b.data).localeCompare(dataOrdenavel(a.data)));
+  const totalLitros = registros.reduce((s, r) => s + numeroSeguro(r.litros), 0);
+  const totalValor = registros.reduce((s, r) => s + numeroSeguro(r.litros) * numeroSeguro(r.valorLitro), 0);
+
+  return (
+    <div className="tl-fade-in">
+      <PageHeader
+        eyebrow="Frota"
+        title="Diesel"
+        action={<Button icon={Plus} onClick={() => setEditing(emptyRegistroDiesel())}>Novo abastecimento</Button>}
+      />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "12px", marginBottom: "20px", maxWidth: "460px" }}>
+        <MiniStat label="Total abastecido" valor={`${totalLitros.toFixed(1)} L`} />
+        <MiniStat label="Total gasto" valor={money(totalValor)} />
+      </div>
+      {porData.length === 0 ? (
+        <EmptyState icon={Fuel} title="Nenhum abastecimento registrado ainda" />
+      ) : (
+        <Table
+          columns={["Data", "Placa", "Motorista", "Km atual", "Litros", "Valor/L", "Consumo (km/L)", ""]}
+          rows={porData.map((r) => (
+            <tr key={r.id} style={rowStyle}>
+              <td style={{ ...tdStyle, color: "var(--text-muted)" }}>{fmtDate(r.data)}</td>
+              <td style={{ ...tdStyle, fontWeight: 600 }}>{r.placa}</td>
+              <td style={{ ...tdStyle, color: "var(--text-muted)" }}>{r.motorista || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{r.kmAtual || "-"}</td>
+              <td style={tdStyle} className="tl-mono">{r.litros || "-"} L</td>
+              <td style={tdStyle} className="tl-mono">{money(r.valorLitro)}</td>
+              <td style={tdStyle} className="tl-mono">{r.consumoKmL != null ? `${r.consumoKmL.toFixed(2)} km/L` : "-"}</td>
+              <td style={{ ...tdStyle, textAlign: "right" }}>
+                <RowActions onEdit={() => setEditing(r)} onDelete={() => setDeleting(r)} />
+              </td>
+            </tr>
+          ))}
+        />
+      )}
+      {editing && (
+        <Modal title={editing.placa ? "Editar abastecimento" : "Novo abastecimento"} onClose={() => setEditing(null)}>
+          <form onSubmit={(e) => { e.preventDefault(); salvar(editing); }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <Field label="Data">
+                <Input type="date" value={editing.data} onChange={(e) => setEditing({ ...editing, data: e.target.value })} />
+              </Field>
+              <Field label="Placa">
+                <Input value={editing.placa} onChange={(e) => setEditing({ ...editing, placa: e.target.value })} required />
+              </Field>
+            </div>
+            <Field label="Motorista">
+              <Input value={editing.motorista} onChange={(e) => setEditing({ ...editing, motorista: e.target.value })} />
+            </Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <Field label="Km atual (odômetro)">
+                <Input type="number" min="0" step="1" value={editing.kmAtual} onChange={(e) => setEditing({ ...editing, kmAtual: e.target.value })} />
+              </Field>
+              <Field label="Litros abastecidos">
+                <Input type="number" min="0" step="0.1" value={editing.litros} onChange={(e) => setEditing({ ...editing, litros: e.target.value })} />
+              </Field>
+            </div>
+            <Field label="Valor por litro (R$)">
+              <Input type="number" min="0" step="0.01" value={editing.valorLitro} onChange={(e) => setEditing({ ...editing, valorLitro: e.target.value })} />
+            </Field>
+            <p style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "16px" }}>
+              O consumo (km/L) é calculado sozinho, comparando com o km do abastecimento anterior dessa mesma placa.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancelar</Button>
+              <Button type="submit">Salvar</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {deleting && (
+        <ConfirmDelete label={`o abastecimento de "${deleting.placa}"`} dados={deleting} onConfirm={() => remove(deleting.id)} onCancel={() => setDeleting(null)} />
+      )}
+    </div>
+  );
+}
 
 const emptyCompraMaterial = () => ({
   id: uid(),
@@ -11479,6 +11334,7 @@ function CompraMaterialForm({ initial, onSave, onClose }) {
 
 function EstoqueModule({ movimentos, onChange }) {
   const [registrandoSaida, setRegistrandoSaida] = useState(null); // material selecionado
+  const [excluindo, setExcluindo] = useState(null); // movimento selecionado pra excluir
 
   const saldoPorMaterial = useMemo(() => {
     const mapa = {};
@@ -11494,6 +11350,15 @@ function EstoqueModule({ movimentos, onChange }) {
     if (!quantidade || Number(quantidade) <= 0) return;
     onChange([...(movimentos || []), { id: uid(), data: new Date().toISOString().slice(0, 10), material, tipo: "Saída", quantidade: Number(quantidade), motivo: motivo || "Uso na produção" }]);
     setRegistrandoSaida(null);
+  };
+
+  // Excluir um movimento já "devolve" o valor sozinho — o saldo é sempre
+  // recalculado a partir da lista de movimentos, então tirar uma Saída daqui
+  // aumenta o saldo de volta, e tirar uma Entrada reduz, sem precisar de
+  // nenhum ajuste manual extra.
+  const excluirMovimento = (id) => {
+    onChange((movimentos || []).filter((mv) => mv.id !== id));
+    setExcluindo(null);
   };
 
   return (
@@ -11525,7 +11390,7 @@ function EstoqueModule({ movimentos, onChange }) {
         <EmptyState icon={Boxes} title="Nenhum movimento de estoque ainda" hint="Toda compra de material já lança entrada aqui sozinha." />
       ) : (
         <Table
-          columns={["Data", "Material", "Tipo", "Quantidade", "Motivo"]}
+          columns={["Data", "Material", "Tipo", "Quantidade", "Motivo", ""]}
           rows={[...movimentos].sort((a, b) => dataOrdenavel(b.data).localeCompare(dataOrdenavel(a.data))).slice(0, 100).map((mv) => (
             <tr key={mv.id} style={rowStyle}>
               <td style={{ ...tdStyle, color: "var(--text-muted)" }}>{fmtDate(mv.data)}</td>
@@ -11535,6 +11400,11 @@ function EstoqueModule({ movimentos, onChange }) {
               </td>
               <td style={tdStyle} className="tl-mono">{mv.quantidade} {UNIDADE_POR_MATERIAL[mv.material]}</td>
               <td style={{ ...tdStyle, color: "var(--text-muted)" }}>{mv.motivo || "-"}</td>
+              <td style={{ ...tdStyle, textAlign: "right" }}>
+                <button type="button" onClick={() => setExcluindo(mv)} className="tl-focus" style={{ ...iconBtnStyle, color: "var(--danger)" }} title="Excluir movimento (devolve o valor pro estoque)">
+                  <X size={13} />
+                </button>
+              </td>
             </tr>
           ))}
         />
@@ -11542,6 +11412,14 @@ function EstoqueModule({ movimentos, onChange }) {
 
       {registrandoSaida && (
         <RegistrarSaidaModal material={registrandoSaida} onConfirm={registrarSaida} onCancel={() => setRegistrandoSaida(null)} />
+      )}
+      {excluindo && (
+        <ConfirmDelete
+          label={`o movimento de ${excluindo.tipo.toLowerCase()} de ${excluindo.material} (${excluindo.quantidade} ${UNIDADE_POR_MATERIAL[excluindo.material]})`}
+          dados={excluindo}
+          onConfirm={() => excluirMovimento(excluindo.id)}
+          onCancel={() => setExcluindo(null)}
+        />
       )}
     </div>
   );
