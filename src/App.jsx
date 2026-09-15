@@ -1343,6 +1343,7 @@ export default function App() {
   // alguém mais mudou algo enquanto essa pessoa estava editando, evitando
   // que um salve por cima do outro sem perceber.
   const lastSyncedRef = useRef({});
+  const persistQueueRef = useRef({});
   const [loadError, setLoadError] = useState("");
   const [clientes, setClientes] = useState([]);
   const [producaoEsc, setProducaoEsc] = useState([]);
@@ -1580,7 +1581,21 @@ export default function App() {
     })();
   }, []);
 
-  const persist = useCallback(async (key, setter, next) => {
+  // Salva sempre em fila, uma ação de cada vez, por área (key). Antes disso,
+  // duas ações rápidas na MESMA área (ex.: dois cliques seguidos, dois campos
+  // salvando quase juntos) podiam disparar o aviso de "alguém mais salvou"
+  // sem ninguém mais ter mexido em nada — a segunda ação conferia o banco
+  // antes da primeira terminar de salvar. Enfileirando, a segunda ação só
+  // começa a conferir depois que a primeira já terminou e atualizou a
+  // referência do que foi salvo por último.
+  const persist = useCallback((key, setter, next) => {
+    const anterior = persistQueueRef.current[key] || Promise.resolve();
+    const vez = anterior.then(() => persistUmaVez(key, setter, next));
+    persistQueueRef.current[key] = vez.catch(() => {});
+    return vez;
+  }, []);
+
+  const persistUmaVez = useCallback(async (key, setter, next) => {
     try {
       // Antes de salvar, confere se alguém mais já mudou essa mesma área
       // desde a última vez que a gente confirmou o que tinha nela — evita
@@ -4189,18 +4204,17 @@ function RelatorioGeralPedido({ pedido, cliente, producaoEsc, propostas, finance
 
         {lancamentosEsc.length > 0 && (
           <div style={{ marginBottom: "18px" }}>
-            <strong style={{ fontSize: "13.5px" }}>Produção Escavadeira ({lancamentosEsc.length})</strong>
+            <strong style={{ fontSize: "13.5px" }}>Produção Concreto ({lancamentosEsc.length})</strong>
             {lancamentosEsc.map((r) => (
               <div key={r.id} style={{ borderBottom: "1px solid #eee", padding: "6px 0" }}>
                 <ReportRow label={`${fmtDate(r.data)} — ${r.equipamento || "-"}`} value={<strong>{money(r.total)}</strong>} />
                 <div style={{ fontSize: "11px", color: "#777", paddingLeft: "4px" }}>
-                  Diária: {money(r.valorDiaria)} · Frete: {money(r.frete)}
-                  {" · "}Retirada de material: {r.retiradaMaterial ? `Sim — ${r.retiradaMaterial}` : "Não"}
+                  Valor: {money(r.valorDiaria)} · Bomba: {money(r.frete)}
                   {(r.viagens || []).length > 0 && ` · Viagens: ${r.viagens.length} (${money((r.viagens || []).reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0))})`}
                 </div>
               </div>
             ))}
-            <ReportRow label="Subtotal Escavadeira" value={<strong>{money(totalEsc)}</strong>} />
+            <ReportRow label="Subtotal Concreto" value={<strong>{money(totalEsc)}</strong>} />
           </div>
         )}
 
@@ -7473,8 +7487,7 @@ function RestaurarBackupSection({
 
   const AREAS = [
     { key: "clientes", label: "Clientes", onChange: onChangeClientes },
-    { key: "producaoEsc", label: "Produção Escavadeira", onChange: onChangeProducaoEsc },
-    { key: "producaoPerf", label: "Produção Perfuratriz", onChange: onChangeProducaoPerf },
+    { key: "producaoEsc", label: "Produção Concreto", onChange: onChangeProducaoEsc },
     { key: "financeiro", label: "Financeiro", onChange: onChangeFinanceiro },
     { key: "manutencoes", label: "Manutenção", onChange: onChangeManutencoes },
     { key: "agenda", label: "Agenda", onChange: onChangeAgenda },
@@ -7605,7 +7618,7 @@ function RevisarPagamentosSection({ producaoEsc, producaoPerf, onChangeProducaoE
           const valorPago = r.valorPago !== "" && r.valorPago !== undefined ? numeroSeguro(r.valorPago) : r.totalCalculado;
           return r.totalCalculado - valorPago > 0.005;
         });
-    return [...deLista(producaoEsc, "Escavadeira"), ...deLista(producaoPerf, "Perfuratriz")].filter((r) => !ignorados.has(r.id));
+    return [...deLista(producaoEsc, "Concreto")].filter((r) => !ignorados.has(r.id));
   }, [producaoEsc, producaoPerf, ignorados]);
 
   const corrigirParaIntegral = (item) => {
@@ -7894,8 +7907,7 @@ function SincronizarPlanilhaSection({
 
   const GRUPOS = preview
     ? [
-        { titulo: "Produção Escavadeira", itens: preview.mudancasEsc, render: (m) => `Pedido #${m.pedido} · ${fmtDate(m.data)} · ${m.equipamento} · ${m.cliente}` },
-        { titulo: "Produção Perfuratriz", itens: preview.mudancasPerf, render: (m) => `Pedido #${m.pedido} · ${fmtDate(m.data)} · ${m.equipamento} · ${m.cliente}` },
+        { titulo: "Produção Concreto", itens: preview.mudancasEsc, render: (m) => `Pedido #${m.pedido} · ${fmtDate(m.data)} · ${m.equipamento} · ${m.cliente}` },
         { titulo: "Clientes", itens: preview.mudancasClientes, render: (m) => `Pedido #${m.pedido} · ${m.nome}` },
         { titulo: "Financeiro · Contas a Pagar", itens: preview.mudancasFinanceiroPagar, render: (m) => `${m.descricao} · vence ${fmtDate(m.vencimento)}` },
       ].filter((g) => g.itens.length > 0)
@@ -8653,7 +8665,6 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
           { id: "comparativo", label: "Comparativo mensal" },
           { id: "operadores", label: "Produtividade" },
           { id: "vendedores", label: "Vendedores" },
-          { id: "frete", label: "Frete" },
         ].map((t) => (
           <button
             key={t.id}
@@ -8682,7 +8693,6 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
       {subTab === "comparativo" && <ComparativoMensalSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "operadores" && <ProdutividadeOperadorSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "vendedores" && <VendedoresSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
-      {subTab === "frete" && <FreteSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
 
       {subTab === "resumo" && (
       <div className="tl-print-area" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -11298,7 +11308,7 @@ function CompraMaterialForm({ initial, onSave, onClose }) {
           <Field label={`Quantidade (${UNIDADE_POR_MATERIAL[form.material] || "un."})`}>
             <Input type="number" min="0" step="0.01" value={form.quantidade} onChange={set("quantidade")} required />
           </Field>
-          <Field label="Valor unitário (R$)">
+          <Field label="Valor por tonelada (R$)">
             <Input type="number" min="0" step="0.01" value={form.valorUnitario} onChange={set("valorUnitario")} required />
           </Field>
         </div>
