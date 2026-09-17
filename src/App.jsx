@@ -10015,6 +10015,15 @@ function FinanceiroModule({ contas, clientes, clienteByPedido, producaoEsc, prod
   };
 
   const listaBase = contas.filter((c) => c.tipo === tipoAtual);
+  // Falta pagar de verdade — desconta o que já foi recebido/pago em
+  // partes (valorPago), mesmo pra contas que ainda estão "Pendente". Sem
+  // isso, uma conta com pagamento parcial aparecia com o valor cheio nos
+  // cartões de resumo e na lista, como se nada tivesse sido pago ainda.
+  const faltaPagarConta = (c) => {
+    const pago = c.valorPago !== "" && c.valorPago !== undefined && c.valorPago !== null ? numeroSeguro(c.valorPago) : (c.status === "Pago" ? numeroSeguro(c.valor) : 0);
+    return Math.max(0, numeroSeguro(c.valor) - pago);
+  };
+
   const lista = listaBase.filter((c) => {
     if (somenteZerados && numeroSeguro(c.valor) !== 0) return false;
     if (buscaPedido.trim() && !String(c.pedido || "").toLowerCase().includes(buscaPedido.trim().toLowerCase())) return false;
@@ -10026,9 +10035,9 @@ function FinanceiroModule({ contas, clientes, clienteByPedido, producaoEsc, prod
 
   const qtdZerados = listaBase.filter((c) => numeroSeguro(c.valor) === 0).length;
 
-  const totalPendente = listaBase.filter((c) => c.status === "Pendente" || c.status === "Boleto" || c.status === "Pix").reduce((s, c) => s + numeroSeguro(c.valor), 0);
+  const totalPendente = listaBase.filter((c) => c.status === "Pendente" || c.status === "Boleto" || c.status === "Pix").reduce((s, c) => s + faltaPagarConta(c), 0);
   const totalPago = listaBase.filter((c) => c.status === "Pago").reduce((s, c) => s + numeroSeguro(c.valor), 0);
-  const totalAtrasado = listaBase.filter((c) => c.status === "Pendente" && dataOrdenavel(c.vencimento) < hojeISO).reduce((s, c) => s + numeroSeguro(c.valor), 0);
+  const totalAtrasado = listaBase.filter((c) => c.status === "Pendente" && dataOrdenavel(c.vencimento) < hojeISO).reduce((s, c) => s + faltaPagarConta(c), 0);
 
   // Resumo do pedido digitado na busca — soma tudo daquele pedido e quebra
   // por status (Pendente, Boleto, Pago, Cancelado, Atrasado), pra saber de
@@ -10224,12 +10233,13 @@ function FinanceiroModule({ contas, clientes, clienteByPedido, producaoEsc, prod
             <Table
               columns={
                 subTab === "pagar"
-                  ? ["Pedido", "Fornecedor", "Descrição", "Vencimento", "Valor", "Status", ""]
-                  : ["Pedido", "Cliente", "Descrição", "Data de compra", "Vencimento", "Valor", "Status", ""]
+                  ? ["Pedido", "Fornecedor", "Descrição", "Vencimento", "Valor", "Falta pagar", "Status", ""]
+                  : ["Pedido", "Cliente", "Descrição", "Data de compra", "Vencimento", "Valor", "Falta pagar", "Status", ""]
               }
               rows={[...lista].sort((a, b) => dataOrdenavel(b.vencimento).localeCompare(dataOrdenavel(a.vencimento))).map((c) => {
                 const atrasada = c.status === "Pendente" && dataOrdenavel(c.vencimento) && dataOrdenavel(c.vencimento) < hojeISO;
                 const cliente = c.pedido ? clienteByPedido.get(String(c.pedido).trim()) : null;
+                const falta = faltaPagarConta(c);
                 return (
                   <tr key={c.id} style={rowStyle}>
                     <td style={tdStyle}>
@@ -10250,6 +10260,9 @@ function FinanceiroModule({ contas, clientes, clienteByPedido, producaoEsc, prod
                     )}
                     <td style={{ ...tdStyle, color: "var(--text-muted)" }}>{fmtDate(c.vencimento)}</td>
                     <td style={tdStyle} className="tl-mono">{money(c.valor)}</td>
+                    <td style={{ ...tdStyle, fontWeight: falta > 0.005 ? 700 : 400 }} className="tl-mono">
+                      {falta > 0.005 ? <span style={{ color: "var(--danger)" }}>{money(falta)}</span> : <span style={{ color: "var(--success)" }}>Quitado</span>}
+                    </td>
                     <td style={tdStyle}><FinStatusBadge status={c.status} atrasada={atrasada} /></td>
                     <td style={{ ...tdStyle, textAlign: "right" }}>
                       <div style={{ display: "inline-flex", gap: "4px" }}>
