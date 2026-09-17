@@ -2602,8 +2602,8 @@ function FechamentoMensalModal({ mes, producaoEsc, producaoPerf, financeiro, cli
         <div style={{ display: "flex", alignItems: "center", gap: "12px", borderBottom: "2px solid #1a1a1a", paddingBottom: "14px", marginBottom: "20px" }}>
           <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", borderRadius: "6px" }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>SUA EMPRESA</div>
-            <div style={{ fontSize: "11px", color: "#555" }}>CNPJ: 00.000.000/0000-00 · Endereço da empresa</div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+            <div style={{ fontSize: "11px", color: "#555" }}>{[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ") || "Dados da empresa em Configurações"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: "17px", textTransform: "capitalize" }}>FECHAMENTO — {nomeMes}</div>
@@ -3518,6 +3518,8 @@ function ClienteForm({ initial, onSave, onClose, statusClientes }) {
   const [form, setForm] = useState(initial);
   const [rascunhoRecuperado] = useState(() => !!initial.__rascunho);
   const [buscandoCep, setBuscandoCep] = useState(false);
+  const [cepEntrega, setCepEntrega] = useState("");
+  const [buscandoCepEntrega, setBuscandoCepEntrega] = useState(false);
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   useEffect(() => {
@@ -3544,6 +3546,26 @@ function ClienteForm({ initial, onSave, onClose, statusClientes }) {
       /* sem internet ou serviço fora do ar — segue com preenchimento manual */
     }
     setBuscandoCep(false);
+  };
+
+  // Igual à busca de CEP da cobrança acima, mas escreve o resultado direto
+  // como uma linha de texto pronta dentro de "Endereço de Entrega" — já que
+  // esse campo é livre (obra pode não ter número/CEP formal cadastrável).
+  const buscarCepEntrega = async (cepDigitado) => {
+    const limpo = (cepDigitado || "").replace(/\D/g, "");
+    if (limpo.length !== 8) return;
+    setBuscandoCepEntrega(true);
+    try {
+      const resp = await fetch(`https://viacep.com.br/ws/${limpo}/json/`);
+      const dados = await resp.json();
+      if (!dados.erro) {
+        const linha = [dados.logradouro, dados.bairro, dados.localidade && dados.uf ? `${dados.localidade}/${dados.uf}` : "", `CEP ${cepDigitado}`].filter(Boolean).join(" — ");
+        setForm((f) => ({ ...f, enderecoEntrega: linha }));
+      }
+    } catch (e) {
+      /* sem internet ou serviço fora do ar — segue com preenchimento manual */
+    }
+    setBuscandoCepEntrega(false);
   };
 
   return (
@@ -3647,6 +3669,27 @@ function ClienteForm({ initial, onSave, onClose, statusClientes }) {
         </div>
 
         <Field label="Endereço de Entrega" hint="Deixa em branco se for igual ao endereço de cobrança acima (ex: local da obra)">
+          <div style={{ display: "flex", gap: "8px", marginBottom: "8px", flexWrap: "wrap" }}>
+            <Input
+              value={cepEntrega}
+              onChange={(e) => {
+                const cep = formatarCep(e.target.value);
+                setCepEntrega(cep);
+                if (cep.replace(/\D/g, "").length === 8) buscarCepEntrega(cep);
+              }}
+              placeholder="CEP da obra (00000-000)"
+              style={{ maxWidth: "160px" }}
+            />
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, enderecoEntrega: enderecoCompleto(form) })}
+              className="tl-focus"
+              style={{ background: "none", border: "none", color: "var(--accent)", fontSize: "12.5px", textDecoration: "underline", cursor: "pointer", padding: "8px 0" }}
+            >
+              Usar o mesmo endereço de cobrança
+            </button>
+            {buscandoCepEntrega && <span style={{ fontSize: "11.5px", color: "var(--text-faint)", alignSelf: "center" }}>Buscando...</span>}
+          </div>
           <Input value={form.enderecoEntrega} onChange={set("enderecoEntrega")} placeholder="Ex: Rua da Obra, 123 - Bairro X" />
         </Field>
 
@@ -3769,7 +3812,7 @@ const emptyProducao = () => ({
   valorPago: "", // se for menor que o total, é pagamento parcial
   dataProximoPagamento: "", // obrigatório se o pagamento ficou parcial
 });
-const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", sobra: "", lacre: "", valorBomba: "", numeroBomba: "", descricao: "", valor: "" });
+const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", sobra: "", sobraDestinoPedido: "", lacre: "", valorBomba: "", numeroBomba: "", descricao: "", valor: "" });
 
 function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords, clienteByPedido, operadores, vendedores, motoristas, caminhoes, empresasRetirada, propostas, todasProducaoEsc, todasProducaoPerf, financeiro, ticks, onChange, onGerarProposta }) {
   const [editing, setEditing] = useState(null);
@@ -4203,8 +4246,8 @@ function RelatorioGeralPedido({ pedido, cliente, producaoEsc, propostas, finance
         <div style={{ display: "flex", alignItems: "center", gap: "12px", borderBottom: "2px solid #1a1a1a", paddingBottom: "14px", marginBottom: "20px" }}>
           <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", borderRadius: "6px" }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>SUA EMPRESA</div>
-            <div style={{ fontSize: "11px", color: "#555" }}>CNPJ: 00.000.000/0000-00 · Endereço da empresa</div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+            <div style={{ fontSize: "11px", color: "#555" }}>{[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ") || "Dados da empresa em Configurações"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: "17px" }}>RELATÓRIO GERAL</div>
@@ -4376,22 +4419,19 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
   const propostaDoPedido = (propostas || []).find((p) => String(p.pedido).trim() === String(form.pedido).trim());
   const totalProposta = propostaDoPedido ? propostaDoPedido.itens.reduce((s, it) => s + (Number(it.qtd) || 0) * (Number(it.valorUnit) || 0), 0) : 0;
 
+  // Antes, "puxar da proposta" jogava os itens dentro de "viagens" — que é
+  // EXATAMENTE a mesma lista das cargas da Central de Balança. Isso criava
+  // cargas falsas lá (sem volume/placa/motorista de verdade), inflava o
+  // total a cada clique repetido (somava de novo por cima) e desalinhava
+  // Financeiro e Fechamento. Agora não mexe mais em "viagens": só preenche
+  // o valor por m³ e a quantidade do lançamento com o total da proposta —
+  // e sempre SUBSTITUI (nunca soma), então clicar de novo não duplica nada.
   const puxarDaProposta = () => {
     if (!propostaDoPedido) return;
-    // Cada "carga" calcula o valor como volume × valor por m³ (é a mesma
-    // conta usada na Central de Balança). O bug era gravar aqui só o total
-    // do item em "valor" e deixar "volume" vazio — aí a conta virava
-    // 0 × total = R$ 0,00, e o lançamento não recebia o valor da proposta.
-    // Agora guarda quantidade em "volume" e valor unitário em "valor",
-    // exatamente como a proposta já calcula (qtd × valorUnit).
-    const novasViagens = propostaDoPedido.itens.map((it) => ({
-      ...emptyViagem(),
-      descricao: it.descricao || "",
-      volume: String(Number(it.qtd) || 1),
-      valor: String(Number(it.valorUnit) || 0),
-    }));
-    setForm({ ...form, viagens: [...viagens, ...novasViagens] });
+    setForm({ ...form, qtdDias: "1", valorDiaria: String(totalProposta.toFixed(2)) });
   };
+  const jaPuxouDaProposta = propostaDoPedido && form.qtdDias === "1" && Number(form.valorDiaria) === Number(totalProposta.toFixed(2)) && totalProposta > 0;
+  const limparValoresPuxados = () => setForm({ ...form, qtdDias: "", valorDiaria: "" });
 
   return (
     <>
@@ -4486,10 +4526,18 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
                 Proposta encontrada pra esse pedido
               </div>
               <div>{propostaDoPedido.itens.length} item(ns) · Total: <strong>{money(totalProposta)}</strong></div>
+              {jaPuxouDaProposta && <div style={{ color: "var(--success)", fontSize: "11.5px", marginTop: "2px" }}>✓ Já puxado pra "Metro cúbico" / "Valor metro cúbico" abaixo</div>}
             </div>
-            <Button type="button" size="sm" variant="subtle" icon={FileText} onClick={puxarDaProposta}>
-              Puxar itens e valores da proposta
-            </Button>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+              {jaPuxouDaProposta && (
+                <button type="button" onClick={limparValoresPuxados} className="tl-focus" style={{ background: "none", border: "none", color: "var(--danger)", fontSize: "12px", textDecoration: "underline", cursor: "pointer", padding: 0 }}>
+                  Remover valores puxados
+                </button>
+              )}
+              <Button type="button" size="sm" variant="subtle" icon={FileText} onClick={puxarDaProposta}>
+                {jaPuxouDaProposta ? "Puxar de novo" : "Puxar itens e valores da proposta"}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -5064,6 +5112,11 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
                           <Field label="Sobra que voltou (m³)" hint="Se o caminhão voltou com sobra reaproveitável, desconta daqui do consumo de estoque">
                             <Input type="number" min="0" step="0.1" value={v.sobra} onChange={(e) => setViagem(v.id, "sobra", e.target.value)} />
                           </Field>
+                          {numeroSeguro(v.sobra) > 0 && (
+                            <Field label="Sobra usada em qual obra? (nº do pedido)" hint="Deixa em branco se ainda não foi usada em outra obra — aparece no relatório de Sobras">
+                              <Input value={v.sobraDestinoPedido} onChange={(e) => setViagem(v.id, "sobraDestinoPedido", e.target.value)} placeholder="Ex: 624" />
+                            </Field>
+                          )}
                           {temTraco ? (
                             numeroSeguro(v.volume) > 0 && (
                               <p style={{ fontSize: "10.5px", color: "var(--text-faint)" }}>
@@ -5485,8 +5538,8 @@ function PropostaPreview({ proposta, cliente, onClose }) {
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", borderRadius: "6px" }} />
             <div>
-              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "20px" }}>SUA EMPRESA</div>
-              <div style={{ fontSize: "11.5px", color: "#555" }}>CNPJ: 00.000.000/0000-00 · Endereço da empresa</div>
+              <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "20px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+              <div style={{ fontSize: "11.5px", color: "#555" }}>{[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ") || "Dados da empresa em Configurações"}</div>
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -8723,6 +8776,39 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
   const hojeISO = new Date().toISOString().slice(0, 10);
   const compromissosPendentes = agenda.filter((a) => a.status !== "Concluído").length;
 
+  // Lista todas as cargas que voltaram com sobra (qualquer pedido), mais
+  // nova primeiro — mostra de qual obra a sobra veio (o próprio pedido da
+  // carga) e, se foi preenchido na Central de Balança, pra qual obra ela
+  // foi usada depois.
+  const clienteDoPedidoRel = useMemo(() => {
+    const mapa = new Map();
+    clientes.forEach((c) => mapa.set(String(c.pedido).trim(), c));
+    return mapa;
+  }, [clientes]);
+  const listaSobras = useMemo(() => {
+    const linhas = [];
+    producaoEsc.forEach((r) => {
+      (r.viagens || []).forEach((v) => {
+        if (numeroSeguro(v.sobra) <= 0) return;
+        const clienteOrigem = clienteDoPedidoRel.get(String(r.pedido).trim());
+        const clienteDestino = v.sobraDestinoPedido ? clienteDoPedidoRel.get(String(v.sobraDestinoPedido).trim()) : null;
+        linhas.push({
+          id: v.id,
+          data: r.data,
+          pedidoOrigem: r.pedido,
+          clienteOrigem: clienteOrigem?.nome || r.cliente || "-",
+          volumeCarga: numeroSeguro(v.volume),
+          sobra: numeroSeguro(v.sobra),
+          pedidoDestino: v.sobraDestinoPedido || "",
+          clienteDestino: clienteDestino?.nome || "",
+        });
+      });
+    });
+    return linhas.sort((a, b) => dataOrdenavel(b.data).localeCompare(dataOrdenavel(a.data)));
+  }, [producaoEsc, clienteDoPedidoRel]);
+  const totalSobras = listaSobras.reduce((s, l) => s + l.sobra, 0);
+  const sobrasReaproveitadas = listaSobras.filter((l) => l.pedidoDestino).length;
+
   const secoes = [
     {
       titulo: "Clientes",
@@ -8796,6 +8882,7 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
           { id: "comparativo", label: "Comparativo mensal" },
           { id: "operadores", label: "Produtividade" },
           { id: "vendedores", label: "Vendedores" },
+          { id: "sobras", label: "Sobras" },
         ].map((t) => (
           <button
             key={t.id}
@@ -8824,6 +8911,28 @@ function RelatoriosModule({ clientes, producaoEsc, producaoPerf, propostas, manu
       {subTab === "comparativo" && <ComparativoMensalSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "operadores" && <ProdutividadeOperadorSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
       {subTab === "vendedores" && <VendedoresSection producaoEsc={producaoEsc} producaoPerf={producaoPerf} />}
+      {subTab === "sobras" && (
+        <div className="tl-fade-in">
+          <div style={{ display: "flex", gap: "10px", marginBottom: "16px", flexWrap: "wrap" }}>
+            <MiniStat label="Sobra total (m³)" valor={`${totalSobras.toFixed(1)} m³`} />
+            <MiniStat label="Sobras reaproveitadas em outra obra" valor={`${sobrasReaproveitadas} de ${listaSobras.length}`} />
+          </div>
+          {listaSobras.length === 0 ? (
+            <EmptyState icon={Truck} title="Nenhuma sobra registrada ainda" hint='Preenche "Sobra que voltou" numa carga, na Central de Balança, pra ela aparecer aqui.' />
+          ) : (
+            <Table
+              columns={["Data", "Veio da obra (pedido)", "Volume da carga", "Sobra", "Foi usada na obra (pedido)"]}
+              rows={listaSobras.map((l) => [
+                fmtDate(l.data),
+                `#${l.pedidoOrigem} — ${l.clienteOrigem}`,
+                `${l.volumeCarga} m³`,
+                <strong key="sobra">{l.sobra} m³</strong>,
+                l.pedidoDestino ? `#${l.pedidoDestino}${l.clienteDestino ? ` — ${l.clienteDestino}` : ""}` : <span style={{ color: "var(--text-faint)" }}>Não informado</span>,
+              ])}
+            />
+          )}
+        </div>
+      )}
 
       {subTab === "resumo" && (
       <div className="tl-print-area" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -9741,8 +9850,8 @@ function RelatorioProducaoFinanceiro({ itens, tipoFixo, onClose }) {
         <div style={{ display: "flex", alignItems: "center", gap: "12px", borderBottom: "2px solid #1a1a1a", paddingBottom: "14px", marginBottom: "20px" }}>
           <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", borderRadius: "6px" }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>SUA EMPRESA</div>
-            <div style={{ fontSize: "11px", color: "#555" }}>CNPJ: 00.000.000/0000-00 · Endereço da empresa</div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+            <div style={{ fontSize: "11px", color: "#555" }}>{[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ") || "Dados da empresa em Configurações"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: "17px" }}>RELATÓRIO</div>
@@ -10327,11 +10436,22 @@ function ReciboView({ conta, cliente, onClose }) {
   const dataPagamento = conta.dataPagamento || conta.vencimento;
   const numeroRecibo = String(conta.id).slice(-6).toUpperCase();
 
-  // Quando o recibo junta vários dias de produção (producaoDetalhe), o
-  // valor certo a mostrar é a SOMA de tudo — não o valor de um lançamento
-  // só. E o texto ganha o período (datas) trabalhado.
+  // O valor do pedido/serviço é sempre o que está gravado na própria conta
+  // (o que foi editado em Financeiro) — nunca recalculado somando outros
+  // lançamentos de Produção com o mesmo número de pedido, porque isso podia
+  // trazer um total diferente do que a conta realmente tem (o bug do
+  // recibo "não bater o valor real"). O "producaoDetalhe" só serve pra
+  // montar a lista de itens do detalhamento abaixo, não pra recalcular o
+  // valor do pedido.
   const producaoDetalhe = conta.producaoDetalhe || [];
-  const valorTotal = producaoDetalhe.length > 0 ? producaoDetalhe.reduce((s, r) => s + numeroSeguro(r.total), 0) : numeroSeguro(conta.valor);
+  const valorTotal = numeroSeguro(conta.valor);
+  // Quanto foi de fato recebido nesse recibo: usa "valor pago" da conta se
+  // tiver sido preenchido; senão assume o status — Pago quer dizer tudo
+  // recebido, senão não presume nada recebido ainda.
+  const valorRecebido = conta.valorPago !== "" && conta.valorPago !== undefined && conta.valorPago !== null
+    ? numeroSeguro(conta.valorPago)
+    : (conta.status === "Pago" ? valorTotal : 0);
+  const saldoEmAberto = Math.max(0, valorTotal - valorRecebido);
   const datasOrdenadas = [...new Set(producaoDetalhe.map((r) => r.data).filter(Boolean))].sort((a, b) => dataOrdenavel(a).localeCompare(dataOrdenavel(b)));
   const periodoTexto =
     datasOrdenadas.length === 0
@@ -10352,7 +10472,7 @@ function ReciboView({ conta, cliente, onClose }) {
       `Recibo nº ${numeroRecibo}\n` +
       `Recebemos de: ${nomeCliente}\n` +
       `Referente a: ${conta.descricao || "-"}\n` +
-      `Valor: ${money(conta.valor)}\n` +
+      `Valor: ${money(valorRecebido)}\n` +
       `Data do pagamento: ${fmtDate(dataPagamento)}\n\n${PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}`;
 
     let telefone = (cliente?.telefone || "").replace(/\D/g, "");
@@ -10403,8 +10523,8 @@ function ReciboView({ conta, cliente, onClose }) {
         <div style={{ display: "flex", alignItems: "center", gap: "12px", borderBottom: "2px solid #1a1a1a", paddingBottom: "14px", marginBottom: "20px" }}>
           <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", borderRadius: "6px" }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>SUA EMPRESA</div>
-            <div style={{ fontSize: "11px", color: "#555" }}>CNPJ: 00.000.000/0000-00 · Endereço da empresa</div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+            <div style={{ fontSize: "11px", color: "#555" }}>{[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ") || "Dados da empresa em Configurações"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: "17px" }}>RECIBO Nº {numeroRecibo}</div>
@@ -10414,20 +10534,30 @@ function ReciboView({ conta, cliente, onClose }) {
 
         <p style={{ fontSize: "14px", lineHeight: 1.8, marginBottom: "24px" }}>
           Recebemos de <strong>{nomeCliente}</strong>{cliente?.cpf ? ` (CPF/CNPJ ${cliente.cpf})` : ""}, a quantia de{" "}
-          <strong>{money(valorTotal)}</strong>, referente a <strong>{conta.descricao || "serviço prestado"}</strong>
+          <strong>{money(valorRecebido)}</strong>, referente a <strong>{conta.descricao || "serviço prestado"}</strong>
           {equipamentosTexto && ` (${equipamentosTexto})`}
           {conta.pedido ? `, pedido nº ${conta.pedido}` : ""}
           {periodoTexto}, pago em {fmtDate(dataPagamento)}
           {conta.formaPagamento ? ` via ${conta.formaPagamento}` : ""}.
+          {saldoEmAberto > 0.005 && (
+            <><br /><span style={{ color: "#a15c00" }}>Valor total do pedido: {money(valorTotal)} — saldo em aberto: {money(saldoEmAberto)}.</span></>
+          )}
         </p>
 
         {(conta.producaoDetalhe || []).length > 0 && (() => {
+          // Detalhamento do serviço — separado em Concreto e Bomba (nunca
+          // "Escavadeira"/"Frete"/"Viagens", que eram nomes de campos
+          // antigos e não diziam nada sobre o que foi entregue). O valor do
+          // concreto usa as cargas reais lançadas na Central de Balança
+          // quando existem; sem cargas, cai pro valor por m³ do lançamento.
           const itensRecibo = [];
           conta.producaoDetalhe.forEach((r) => {
-            if (numeroSeguro(r.valorDiaria) > 0) itensRecibo.push({ label: `${r.tipoEquip || "Diária"} — ${fmtDate(r.data)}`, valor: numeroSeguro(r.valorDiaria) });
-            if (numeroSeguro(r.frete) > 0) itensRecibo.push({ label: `Frete — ${fmtDate(r.data)}`, valor: numeroSeguro(r.frete) });
-            const viagensTotal = (r.viagens || []).reduce((s, v) => s + subtotalCarga(v) + (Number(v.valorBomba) || 0), 0);
-            if (viagensTotal > 0) itensRecibo.push({ label: `Viagens — ${fmtDate(r.data)}`, valor: viagensTotal });
+            const especConcreto = [r.fck, r.brita, r.slump ? `SLUMP ${r.slump}` : ""].filter(Boolean).join(" - ");
+            const viagensConcreto = (r.viagens || []).reduce((s, v) => s + subtotalCarga(v), 0);
+            const valorConcreto = viagensConcreto > 0 ? viagensConcreto : numeroSeguro(r.valorDiaria);
+            if (valorConcreto > 0) itensRecibo.push({ label: `Concreto${especConcreto ? ` — ${especConcreto}` : ""} — ${fmtDate(r.data)}`, valor: valorConcreto });
+            const valorBomba = numeroSeguro(r.frete) + (r.viagens || []).reduce((s, v) => s + numeroSeguro(v.valorBomba), 0);
+            if (valorBomba > 0) itensRecibo.push({ label: `Bomba — ${fmtDate(r.data)}`, valor: valorBomba });
           });
           const totalItens = itensRecibo.reduce((s, it) => s + it.valor, 0);
           if (itensRecibo.length === 0) return null;
@@ -10442,7 +10572,7 @@ function ReciboView({ conta, cliente, onClose }) {
                   </div>
                 ))}
                 <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0 0", fontWeight: 700, fontSize: "14px" }}>
-                  <span>Total</span>
+                  <span>Total do pedido</span>
                   <span className="tl-mono">{money(totalItens)}</span>
                 </div>
               </div>
@@ -10684,9 +10814,9 @@ function ContaForm({ initial, clienteByPedido, contas, onSave, onClose }) {
   const matched = isReceber && form.pedido ? clienteByPedido.get(String(form.pedido).trim()) : null;
   const ehPago = form.status === "Pago";
   const valorTotal = numeroSeguro(form.valor);
-  const valorPago = form.valorPago !== "" ? numeroSeguro(form.valorPago) : valorTotal;
+  const valorPago = form.valorPago !== "" ? numeroSeguro(form.valorPago) : (ehPago ? valorTotal : 0);
   const restante = Math.max(0, valorTotal - valorPago);
-  const pagamentoParcial = ehPago && restante > 0.005;
+  const pagamentoParcial = (ehPago || form.status === "Pendente") && restante > 0.005 && valorPago > 0.005;
 
   // Soma de TODOS os lançamentos desse mesmo pedido (não só o que está sendo
   // editado agora) — pra ver de cara o total do pedido inteiro sem precisar
@@ -10807,8 +10937,13 @@ function ContaForm({ initial, clienteByPedido, contas, onSave, onClose }) {
           <Input value={form.formaPagamento} onChange={set("formaPagamento")} placeholder="Ex: PIX, boleto, dinheiro" required={ehPago} />
         </Field>
 
-        {ehPago && (
+        {(ehPago || form.status === "Pendente") && (
           <div style={{ background: "var(--bg-base)", border: "1px solid var(--border-soft)", borderRadius: "8px", padding: "14px 16px", marginBottom: "16px" }}>
+            {form.status === "Pendente" && (
+              <p style={{ fontSize: "11.5px", color: "var(--text-faint)", marginTop: 0, marginBottom: "10px" }}>
+                Já recebeu uma parte mas ainda não fechou o pedido? Preenche "Valor pago" abaixo sem mudar o status pra Pago.
+              </p>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
               <Field label="Valor pago (R$)" hint="Deixa em branco se pagou o valor total inteiro">
                 <Input type="number" min="0" step="0.01" value={form.valorPago} onChange={set("valorPago")} placeholder={money(valorTotal)} />
@@ -12309,8 +12444,8 @@ function RelatorioMensalFolha({ mes, itens, onClose }) {
         <div style={{ display: "flex", alignItems: "center", gap: "12px", borderBottom: "2px solid #1a1a1a", paddingBottom: "14px", marginBottom: "20px" }}>
           <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", borderRadius: "6px" }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>SUA EMPRESA</div>
-            <div style={{ fontSize: "11px", color: "#555" }}>CNPJ: 00.000.000/0000-00 · Endereço da empresa</div>
+            <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 800, fontSize: "19px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
+            <div style={{ fontSize: "11px", color: "#555" }}>{[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ") || "Dados da empresa em Configurações"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: "17px", textTransform: "capitalize" }}>FOLHA DE PAGAMENTO</div>
