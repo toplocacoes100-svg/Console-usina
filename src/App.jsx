@@ -1610,7 +1610,7 @@ export default function App() {
             "Alguém mais salvou uma mudança nessa mesma área enquanto você editava. Pra não perder o trabalho de ninguém, recarregue a página (F5) e refaça essa última alteração."
           );
           setTimeout(() => setSaveError(""), 15000);
-          return;
+          return false;
         }
       }
 
@@ -1618,9 +1618,11 @@ export default function App() {
       const ok = await saveCollection(key, next);
       if (ok) {
         lastSyncedRef.current[key] = JSON.stringify(next);
+        return true;
       } else {
         setSaveError("Não consegui salvar agora — verifique sua internet e tente de novo. Se continuar, me avise.");
         setTimeout(() => setSaveError(""), 8000);
+        return false;
       }
     } catch (e) {
       if (e.message === "TAMANHO_EXCEDIDO") {
@@ -1631,6 +1633,7 @@ export default function App() {
         setSaveError("Não consegui salvar agora — verifique sua internet e tente de novo. Se continuar, me avise.");
         setTimeout(() => setSaveError(""), 8000);
       }
+      return false;
     }
   }, []);
 
@@ -9975,9 +9978,19 @@ function FinanceiroModule({ contas, clientes, clienteByPedido, producaoEsc, prod
     }
   };
 
-  const save = (conta) => {
+  // Antes, isso fechava a tela de "editar conta" na hora, sem esperar o
+  // salvamento terminar. Se o salvamento fosse recusado (por exemplo,
+  // porque essa mesma conta tinha sido alterada em outra aba/aparelho
+  // enquanto você editava — muito comum quando o sistema fica aberto em
+  // mais de uma aba do navegador), a tela fechava do mesmo jeito, dando a
+  // falsa impressão de que salvou — e ao reabrir aparecia o valor antigo
+  // de novo. Agora espera a confirmação de que salvou de verdade antes de
+  // fechar; se não salvar, a tela continua aberta com o que você digitou,
+  // pra você tentar de novo (o aviso vermelho no topo explica o motivo).
+  const save = async (conta) => {
     const exists = contas.some((c) => c.id === conta.id);
-    onChange(exists ? contas.map((c) => (c.id === conta.id ? conta : c)) : [...contas, conta]);
+    const salvou = await onChange(exists ? contas.map((c) => (c.id === conta.id ? conta : c)) : [...contas, conta]);
+    if (salvou === false) return;
     sincronizarDespesa(conta);
     sincronizarProducao(conta);
     setEditing(null);
