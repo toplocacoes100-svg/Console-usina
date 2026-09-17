@@ -2942,6 +2942,9 @@ const emptyCliente = () => ({
   numero: "",
   bairro: "",
   complemento: "",
+  municipio: "",
+  uf: "",
+  inscricaoEstadual: "",
   enderecoEntrega: "", // obra/local de entrega, quando diferente da cobrança
   status: "EM ABERTO",
   observacao: "",
@@ -3533,6 +3536,8 @@ function ClienteForm({ initial, onSave, onClose, statusClientes }) {
           ...f,
           endereco: dados.logradouro || f.endereco,
           bairro: dados.bairro || f.bairro,
+          municipio: dados.localidade || f.municipio,
+          uf: dados.uf || f.uf,
         }));
       }
     } catch (e) {
@@ -3627,6 +3632,17 @@ function ClienteForm({ initial, onSave, onClose, statusClientes }) {
           </Field>
           <Field label="Complemento">
             <Input value={form.complemento} onChange={set("complemento")} placeholder="Apto, bloco, referência..." />
+          </Field>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 0.7fr 1.3fr", gap: "0 16px" }}>
+          <Field label="Município" hint="Preenche sozinho pelo CEP — pode corrigir se precisar">
+            <Input value={form.municipio} onChange={set("municipio")} />
+          </Field>
+          <Field label="UF">
+            <Input value={form.uf} onChange={(e) => setForm({ ...form, uf: e.target.value.toUpperCase().slice(0, 2) })} placeholder="SP" />
+          </Field>
+          <Field label="Inscrição Estadual" hint="Opcional — aparece na Ordem de Serviço">
+            <Input value={form.inscricaoEstadual} onChange={set("inscricaoEstadual")} />
           </Field>
         </div>
 
@@ -3753,7 +3769,7 @@ const emptyProducao = () => ({
   valorPago: "", // se for menor que o total, é pagamento parcial
   dataProximoPagamento: "", // obrigatório se o pagamento ficou parcial
 });
-const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", sobra: "", lacre: "", valorBomba: "", descricao: "", valor: "" });
+const emptyViagem = () => ({ id: uid(), horario: "", placa: "", motorista: "", volume: "", sobra: "", lacre: "", valorBomba: "", numeroBomba: "", descricao: "", valor: "" });
 
 function ProducaoModule({ title, icon, tipo, equipamentos, records, seedRecords, clienteByPedido, operadores, vendedores, motoristas, caminhoes, empresasRetirada, propostas, todasProducaoEsc, todasProducaoPerf, financeiro, ticks, onChange, onGerarProposta }) {
   const [editing, setEditing] = useState(null);
@@ -4362,10 +4378,17 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
 
   const puxarDaProposta = () => {
     if (!propostaDoPedido) return;
+    // Cada "carga" calcula o valor como volume × valor por m³ (é a mesma
+    // conta usada na Central de Balança). O bug era gravar aqui só o total
+    // do item em "valor" e deixar "volume" vazio — aí a conta virava
+    // 0 × total = R$ 0,00, e o lançamento não recebia o valor da proposta.
+    // Agora guarda quantidade em "volume" e valor unitário em "valor",
+    // exatamente como a proposta já calcula (qtd × valorUnit).
     const novasViagens = propostaDoPedido.itens.map((it) => ({
-      id: uid(),
+      ...emptyViagem(),
       descricao: it.descricao || "",
-      valor: String((Number(it.qtd) || 0) * (Number(it.valorUnit) || 0)),
+      volume: String(Number(it.qtd) || 1),
+      valor: String(Number(it.valorUnit) || 0),
     }));
     setForm({ ...form, viagens: [...viagens, ...novasViagens] });
   };
@@ -4612,50 +4635,153 @@ function ProducaoForm({ initial, equipamentos, isPerfuratriz, isEscavadeira, cli
 // Ordem de serviço de UMA carga específica — pronta pra imprimir. Os dados
 // continuam salvos dentro do lançamento de Produção (pedido original); isso
 // só formata essa carga sozinha pra impressão, sem duplicar nada.
+// Célula da tabela "estilo canhoto" (bordas finas, rótulo pequeno em cima,
+// valor embaixo) — usada em vários pontos da Ordem de Serviço pra imitar o
+// layout de nota fiscal que a empresa já usa em papel.
+function CelulaOS({ label, value, flex, borderRight = true }) {
+  return (
+    <div style={{ flex: flex || 1, padding: "5px 8px", borderRight: borderRight ? "1px solid #999" : "none", minWidth: 0 }}>
+      <div style={{ fontSize: "8.5px", fontWeight: 700, letterSpacing: "0.3px", color: "#666", textTransform: "uppercase", marginBottom: "2px" }}>{label}</div>
+      <div style={{ fontSize: "11.5px", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value || "\u00A0"}</div>
+    </div>
+  );
+}
+
 function OrdemServicoCargaModal({ carga, indice, form, cliente, onClose }) {
+  const nomeEmpresa = PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto";
+  const anoPedido = (form.data || "").slice(0, 4) || new Date().getFullYear();
+  const protocolo = `${form.pedido || "0"}${String(indice + 1).padStart(2, "0")}`;
+  const razaoSocial = cliente?.empresa || cliente?.nome || form.cliente || "-";
+  const cnpjCpf = cliente?.cpf || "-";
+  const descricaoConcreto = [form.fck, form.brita, form.slump ? `SLUMP ${form.slump}` : ""].filter(Boolean).join(" - ") || "-";
+  const valorBomba = numeroSeguro(carga.valorBomba);
+  const totalCarga = subtotalCarga(carga) + valorBomba;
+
   return (
     <Modal title={`Ordem de Serviço — Carga ${indice + 1}`} onClose={onClose} wide>
       <div style={{ marginBottom: "16px" }}>
         <Button icon={Printer} onClick={() => window.print()}>Imprimir</Button>
       </div>
-      <div className="tl-print-area" style={{ padding: "4px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "14px", marginBottom: "18px", borderBottom: "2px solid #333", paddingBottom: "12px" }}>
-          <img src={LOGO_DATA_URI()} alt="" style={{ width: "52px", height: "52px", objectFit: "contain", flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 800, fontSize: "17px" }}>{PREFS_ATUAL_REF?.nomeEmpresa || "RJL Mix Concreto"}</div>
-            {(PREFS_ATUAL_REF?.cnpjEmpresa || PREFS_ATUAL_REF?.enderecoEmpresa) && (
-              <div style={{ fontSize: "10.5px", color: "#666", marginTop: "2px" }}>
-                {[PREFS_ATUAL_REF?.cnpjEmpresa ? `CNPJ: ${PREFS_ATUAL_REF.cnpjEmpresa}` : "", PREFS_ATUAL_REF?.enderecoEmpresa || ""].filter(Boolean).join(" — ")}
-              </div>
-            )}
+      <div className="tl-print-area" style={{ background: "#fff", color: "#1a1a1a", padding: "18px", fontFamily: "Inter, sans-serif", fontSize: "12px", border: "1px solid #999" }}>
+        {/* Cabeçalho: logo/empresa à esquerda, data/horário/protocolo à direita */}
+        <div style={{ display: "flex", borderBottom: "2px solid #1a1a1a", paddingBottom: "10px", marginBottom: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1 }}>
+            <img src={LOGO_DATA_URI()} alt="" style={{ width: "44px", height: "44px", objectFit: "contain", flexShrink: 0 }} />
+            <div>
+              <div style={{ fontWeight: 800, fontSize: "15px", lineHeight: 1.15 }}>{nomeEmpresa}</div>
+              {PREFS_ATUAL_REF?.enderecoEmpresa && <div style={{ fontSize: "9.5px", color: "#555" }}>{PREFS_ATUAL_REF.enderecoEmpresa}</div>}
+              {PREFS_ATUAL_REF?.cnpjEmpresa && <div style={{ fontSize: "9.5px", color: "#555" }}>CNPJ: {PREFS_ATUAL_REF.cnpjEmpresa}</div>}
+            </div>
           </div>
-          <div style={{ textAlign: "right", fontSize: "13px", color: "#555", fontWeight: 700 }}>ORDEM DE SERVIÇO<br /><span style={{ fontWeight: 400, fontSize: "11px" }}>Carga {indice + 1}</span></div>
+          <div style={{ display: "flex", border: "1px solid #1a1a1a" }}>
+            <div style={{ padding: "5px 12px", borderRight: "1px solid #1a1a1a", textAlign: "center" }}>
+              <div style={{ fontSize: "8px", fontWeight: 700, color: "#666" }}>DATA DE ENTREGA</div>
+              <div style={{ fontSize: "13px", fontWeight: 800 }}>{fmtDate(form.data) || "-"}</div>
+            </div>
+            <div style={{ padding: "5px 12px", textAlign: "center" }}>
+              <div style={{ fontSize: "8px", fontWeight: 700, color: "#666" }}>HORÁRIO</div>
+              <div style={{ fontSize: "13px", fontWeight: 800 }}>{carga.horario || "-"}</div>
+            </div>
+          </div>
         </div>
-        <div style={{ fontSize: "13px", lineHeight: 2.1 }}>
-          <div><strong>PEDIDO</strong> &nbsp; #{form.pedido || "-"}{form.pedidoCliente ? `  ·  Pedido cliente: ${form.pedidoCliente}` : ""}</div>
-          <div><strong>DATA</strong> &nbsp; {fmtDate(form.data)}{carga.horario ? `  às  ${carga.horario}` : ""}</div>
-          <div><strong>CLIENTE</strong> &nbsp; {cliente?.nome || form.cliente || "-"}</div>
-          <div><strong>ENDEREÇO</strong> &nbsp; {cliente ? enderecoCompleto(cliente) : form.endereco || "-"}</div>
-          <div>
-            <strong>CONCRETO</strong> &nbsp; {[form.fck, form.brita, form.slump ? `SLUMP ${form.slump}` : ""].filter(Boolean).join(" - ") || "-"}
-            {form.peca ? `  ·  Peça: ${form.peca}` : ""}
+        <div style={{ textAlign: "right", fontSize: "10.5px", fontWeight: 700, marginBottom: "10px" }}>PROTOCOLO {protocolo}</div>
+
+        {/* Destinatário */}
+        <div style={{ fontSize: "9px", fontWeight: 700, color: "#666", marginBottom: "2px" }}>DESTINATÁRIO</div>
+        <div style={{ border: "1px solid #999", marginBottom: "10px" }}>
+          <div style={{ display: "flex", borderBottom: "1px solid #999" }}>
+            <CelulaOS label="Razão Social" value={razaoSocial} flex={2.2} />
+            <CelulaOS label="CNPJ / CPF" value={cnpjCpf} flex={1.3} />
+            <CelulaOS label="Data da Emissão" value={fmtDate(form.data)} flex={1} borderRight={false} />
           </div>
-          <div style={{ borderTop: "1px solid #ccc", marginTop: "8px", paddingTop: "8px" }}>
-            <strong>VOLUME</strong> &nbsp; {carga.volume || "-"} m³
+          <div style={{ display: "flex", borderBottom: "1px solid #999" }}>
+            <CelulaOS label="Endereço" value={cliente ? enderecoCompleto(cliente) : form.endereco || "-"} flex={2.2} />
+            <CelulaOS label="Bairro / Distrito" value={cliente?.bairro} flex={1} />
+            <CelulaOS label="CEP" value={cliente?.cep} flex={0.8} />
+            <CelulaOS label="Data Entrada/Saída" value={fmtDate(form.data)} flex={1} borderRight={false} />
           </div>
-          <div><strong>VALOR</strong> &nbsp; {money(subtotalCarga(carga))}</div>
-          {numeroSeguro(carga.valorBomba) > 0 && (
-            <div><strong>BOMBA</strong> &nbsp; {money(carga.valorBomba)}</div>
-          )}
-          <div><strong>LACRE</strong> &nbsp; {carga.lacre || "-"}</div>
-          <div style={{ borderTop: "1px solid #ccc", marginTop: "8px", paddingTop: "8px" }}>
-            <strong>MOTORISTA</strong> &nbsp; {carga.motorista || "-"}
+          <div style={{ display: "flex" }}>
+            <CelulaOS label="Município" value={cliente?.municipio} flex={1.4} />
+            <CelulaOS label="Fone / Fax" value={cliente?.telefone} flex={1} />
+            <CelulaOS label="UF" value={cliente?.uf} flex={0.5} />
+            <CelulaOS label="Inscrição Estadual" value={cliente?.inscricaoEstadual} flex={1} />
+            <CelulaOS label="Hora Entr/Saída" value={carga.horario} flex={1} borderRight={false} />
           </div>
-          <div><strong>PLACA</strong> &nbsp; {carga.placa || "-"}</div>
-          <div><strong>VENDEDOR</strong> &nbsp; {form.vendedor || "-"}</div>
         </div>
-        <div style={{ marginTop: "60px" }}>
-          <div style={{ maxWidth: "260px", borderTop: "1px solid #333", paddingTop: "6px", textAlign: "center", fontSize: "11px", color: "#555" }}>Assinatura do cliente</div>
+
+        {/* Dados do produto */}
+        <div style={{ fontSize: "9px", fontWeight: 700, color: "#666", marginBottom: "2px" }}>DADOS DO PRODUTO</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "10px", fontSize: "11.5px" }}>
+          <thead>
+            <tr>
+              <th style={{ border: "1px solid #999", padding: "5px 8px", fontSize: "9px", textAlign: "left", background: "#f2f2f2" }}>VOLUME m³</th>
+              <th style={{ border: "1px solid #999", padding: "5px 8px", fontSize: "9px", textAlign: "left", background: "#f2f2f2" }}>DESCRIÇÃO</th>
+              <th style={{ border: "1px solid #999", padding: "5px 8px", fontSize: "9px", textAlign: "right", background: "#f2f2f2" }}>VAL. UNIT</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{ border: "1px solid #999", padding: "6px 8px", fontWeight: 700 }}>{carga.volume || "-"}</td>
+              <td style={{ border: "1px solid #999", padding: "6px 8px", fontWeight: 700 }}>{descricaoConcreto}{form.peca ? ` — Peça: ${form.peca}` : ""}</td>
+              <td style={{ border: "1px solid #999", padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>{carga.valor ? money(carga.valor) : "-"}</td>
+            </tr>
+            <tr>
+              <td colSpan={3} style={{ border: "1px solid #999", padding: "6px 8px", textAlign: "right" }}>
+                {valorBomba > 0 && (
+                  <div style={{ fontSize: "11px" }}>Taxa bomba{carga.numeroBomba ? ` Nº ${carga.numeroBomba}` : ""}: <strong>{money(valorBomba)}</strong></div>
+                )}
+                <div style={{ fontSize: "13px", fontWeight: 800, marginTop: valorBomba > 0 ? "3px" : 0 }}>Total: {money(totalCarga)}</div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Observações + informativo preventivo */}
+        <div style={{ fontSize: "9px", fontWeight: 700, color: "#666", marginBottom: "2px" }}>OBSERVAÇÕES</div>
+        <div style={{ border: "1px solid #999", padding: "10px", fontSize: "10.5px", lineHeight: 1.6, marginBottom: "10px" }}>
+          <div style={{ marginBottom: "8px" }}>
+            <strong>PED {form.pedido || "-"}/{String(anoPedido).slice(-2)}</strong>
+            {form.vendedor ? `  VENDEDOR: ${form.vendedor}` : ""}
+            {`  CONTRATANTE: ${razaoSocial}`}
+            {cnpjCpf !== "-" ? ` - CNPJ/CPF: ${cnpjCpf}` : ""}
+            {` - ENDEREÇO: ${cliente ? enderecoCompleto(cliente) : form.endereco || "-"}`}
+            {carga.motorista ? ` - MOTORISTA: ${carga.motorista}` : ""}
+            {carga.lacre ? ` - LACRE: ${carga.lacre}` : ""}
+            {carga.placa ? ` - PLACA: ${carga.placa}` : ""}
+            {valorBomba > 0 ? ` - BOMBA${carga.numeroBomba ? ` Nº ${carga.numeroBomba}` : ""}` : ""}
+          </div>
+          <div style={{ fontWeight: 700, marginBottom: "4px" }}>INFORMATIVO PREVENTIVO AO CLIENTE</div>
+          <ol style={{ margin: 0, paddingLeft: "16px" }}>
+            <li>Molhar bem a laje antes da concretagem;</li>
+            <li>Conferir a nota fiscal e o lacre do caminhão;</li>
+            <li>Verificar o escoramento na laje com apoios de 1 em 1 metro de distância, sob risco de abaulamento e queda;</li>
+            <li>Não alterar a quantidade de água na mistura do concreto, aguardando no mínimo 35 minutos para molhar a laje, após concretagem, sob riscos de fissuras;</li>
+            <li>Molhar a laje por 7 dias e cobrir com lona plástica, mantendo-a sempre umedecida, sob riscos de fissuras;</li>
+            <li>Em caso de contratação de bomba para escoamento do concreto, providenciar um saco de cimento para nata lubrificadora;</li>
+            <li>Em hipótese alguma deve permanecer sob a laje pessoas ou coisas, sendo de total e irrestrita responsabilidade do cliente eventuais danos que ocorrem com aqueles;</li>
+            <li>A responsabilidade da {nomeEmpresa} se limita a obedecer as especificações técnicas do concreto fornecidas pelo cliente, contendo a dosagem, consistência e resistência;</li>
+            <li>Concreto não é impermeável, assim não há garantia contra vazamentos posteriores à sua secagem;</li>
+            <li>A {nomeEmpresa} só se responsabiliza pela entrega correta do produto adquirido, mas não pela medição da quantidade necessária deste, pois o volume pode sofrer variações conforme o terreno, superfícies e montagem das ferragens da obra. Desta forma, se o volume de concreto se mostrar insuficiente, caberá ao comprador a quitação da diferença à maior do concreto consumido;</li>
+            <li>É de responsabilidade do cliente a montagem da laje com materiais apropriados e determinados pelo projeto estrutural, bem como a instalação correta das escoras, devidamente apoiadas em solo firme, tudo em condições técnicas hábeis para suportar o peso do concreto, da laje e dos profissionais que farão a concretagem.</li>
+          </ol>
+          <p style={{ marginTop: "8px", marginBottom: 0 }}>O cliente, que abaixo assina, se declara ciente dos termos acima descritos, bem como ser sua a responsabilidade pelo descumprimento de qualquer uma das regras expostas.</p>
+        </div>
+
+        <div style={{ display: "flex", gap: "24px", marginTop: "26px", marginBottom: "18px" }}>
+          <div style={{ flex: 1, borderTop: "1px solid #1a1a1a", paddingTop: "4px", textAlign: "center", fontSize: "10px", color: "#555" }}>Assinatura</div>
+          <div style={{ flex: 1, borderTop: "1px solid #1a1a1a", paddingTop: "4px", textAlign: "center", fontSize: "10px", color: "#555" }}>RG</div>
+        </div>
+
+        <div style={{ borderTop: "1px dashed #999", paddingTop: "10px", fontSize: "10.5px", lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, marginBottom: "4px" }}>ADIÇÃO DE ÁGUA</div>
+          <p style={{ margin: 0 }}>
+            Determinei a adição de ______ litros de água no volume de ______ m³ de concreto, elevado o abatimento máximo para ______ cm.
+            Tenho ciência que esta adição de água acarretará alterações nas características do concreto, diminuindo a resistência do concreto.
+          </p>
+          <div style={{ display: "flex", gap: "24px", marginTop: "24px" }}>
+            <div style={{ flex: 1, borderTop: "1px solid #1a1a1a", paddingTop: "4px", textAlign: "center", fontSize: "10px", color: "#555" }}>Nome completo / RG</div>
+            <div style={{ flex: 1, borderTop: "1px solid #1a1a1a", paddingTop: "4px", textAlign: "center", fontSize: "10px", color: "#555" }}>Assinatura / Data</div>
+          </div>
         </div>
       </div>
     </Modal>
@@ -4930,6 +5056,11 @@ function CentralBalancaModule({ producaoEsc, clienteByPedido, onChangeProducaoEs
                               <Input type="number" min="0" step="0.01" value={v.valorBomba} onChange={(e) => setViagem(v.id, "valorBomba", e.target.value)} />
                             </Field>
                           </div>
+                          {numeroSeguro(v.valorBomba) > 0 && (
+                            <Field label="Nº da bomba" hint="Aparece na Ordem de Serviço, ex: Bomba Nº 69">
+                              <Input value={v.numeroBomba} onChange={(e) => setViagem(v.id, "numeroBomba", e.target.value)} />
+                            </Field>
+                          )}
                           <Field label="Sobra que voltou (m³)" hint="Se o caminhão voltou com sobra reaproveitável, desconta daqui do consumo de estoque">
                             <Input type="number" min="0" step="0.1" value={v.sobra} onChange={(e) => setViagem(v.id, "sobra", e.target.value)} />
                           </Field>
